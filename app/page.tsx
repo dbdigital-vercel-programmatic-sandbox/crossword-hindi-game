@@ -95,6 +95,10 @@ export default function Page() {
     () => new Set(game.completedIds),
     [game.completedIds]
   )
+  const displayDate = useMemo(
+    () => formatPuzzleDate(scheduledPuzzle.date),
+    [scheduledPuzzle.date]
+  )
 
   const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
     setGame((current) => {
@@ -400,10 +404,10 @@ export default function Page() {
 
           <div className="text-center">
             <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
-              Minimal crossword
+              Daily crossword
             </p>
             <h1 className="text-[clamp(1.45rem,5vw,2rem)] font-semibold tracking-[0.08em] text-slate-800">
-              {scheduledPuzzle.title}
+              {displayDate}
             </h1>
           </div>
 
@@ -891,4 +895,12 @@ function shuffle<T>(items: T[]) {
   }
 
   return next
+}
+
+function formatPuzzleDate(dateKey: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(`${dateKey}T00:00:00`))
 }
