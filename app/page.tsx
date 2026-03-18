@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronLeft, ChevronRight, Delete, Settings2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Delete } from "lucide-react"
 
 import { crosswordLevels } from "@/data/crossword-levels"
 import {
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils"
 
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
+type Screen = "home" | "game"
 
 type GridCell = {
   row: number
@@ -76,10 +77,26 @@ export default function Page() {
     puzzleModel
 
   const [game, setGame] = useState<GameState>(() => puzzleModel.initialGame)
+  const [screen, setScreen] = useState<Screen>("home")
+  const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
+  const storageKey = useMemo(
+    () => getPuzzleStorageKey(scheduledPuzzle.id),
+    [scheduledPuzzle.id]
+  )
 
   useEffect(() => {
-    setGame(puzzleModel.initialGame)
-  }, [puzzleModel])
+    const restoredGame = loadStoredGame(storageKey, puzzleModel)
+    setGame(restoredGame ?? puzzleModel.initialGame)
+    setLoadedStorageKey(storageKey)
+  }, [puzzleModel, storageKey])
+
+  useEffect(() => {
+    if (loadedStorageKey !== storageKey) {
+      return
+    }
+
+    window.localStorage.setItem(storageKey, serializeGame(game))
+  }, [game, loadedStorageKey, storageKey])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -98,6 +115,10 @@ export default function Page() {
   const displayDate = useMemo(
     () => formatPuzzleDate(scheduledPuzzle.date),
     [scheduledPuzzle.date]
+  )
+  const hasProgress = useMemo(
+    () => hasStartedPuzzle(game, puzzleModel.initialEntries),
+    [game, puzzleModel.initialEntries]
   )
 
   const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
@@ -355,6 +376,10 @@ export default function Page() {
   }, [game.feedback])
 
   useEffect(() => {
+    if (screen !== "game") {
+      return
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Backspace") {
         event.preventDefault()
@@ -382,11 +407,64 @@ export default function Page() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [cycleClue, handleBackspace, handleLetter])
+  }, [cycleClue, handleBackspace, handleLetter, screen])
 
   const activeProgress = activeClue.cells.filter(
     (cell) => game.entries[cell.key] === cellData[cell.key].solution
   ).length
+
+  if (screen === "home") {
+    return (
+      <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(18px,4vw,30px)] py-[clamp(18px,4vh,34px)]">
+        <div className="relative flex h-full flex-col justify-between overflow-hidden">
+          <div className="pointer-events-none absolute inset-x-4 top-0 h-40 rounded-full bg-[#e8def8]/55 blur-3xl" />
+
+          <div className="relative">
+            <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
+              Daily crossword
+            </p>
+            <h1 className="mt-3 text-[clamp(2.4rem,10vw,4.4rem)] leading-[0.92] font-semibold tracking-[-0.04em] text-slate-800">
+              {displayDate}
+            </h1>
+            <p className="mt-4 max-w-xs text-sm leading-6 text-slate-500">
+              One puzzle per day, saved automatically on this device.
+            </p>
+          </div>
+
+          <div className="relative space-y-4 rounded-[30px] border border-white/75 bg-white/72 p-5 shadow-[0_28px_80px_-40px_rgba(77,55,118,0.45)] backdrop-blur-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-slate-700">
+                  {hasProgress
+                    ? "Resume today&apos;s puzzle"
+                    : "Start today&apos;s puzzle"}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {game.solvedIds.length}/{clues.length} words solved
+                </p>
+              </div>
+
+              <p className="rounded-full bg-[#f6f0ff] px-3 py-1 text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
+                {game.solvedIds.length === clues.length
+                  ? "Done"
+                  : hasProgress
+                    ? "Saved"
+                    : "New"}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setScreen("game")}
+              className="flex h-14 w-full items-center justify-center rounded-[22px] bg-slate-800 text-sm font-semibold tracking-[0.12em] text-white uppercase shadow-[0_18px_40px_-28px_rgba(15,23,42,0.9)] transition-transform duration-200 hover:-translate-y-0.5"
+            >
+              {hasProgress ? "Continue" : "Play"}
+            </button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(12px,3vw,22px)] py-[clamp(10px,2vh,20px)]">
@@ -396,10 +474,11 @@ export default function Page() {
         <div className="relative flex items-center justify-between">
           <button
             type="button"
-            aria-label="Open settings"
+            onClick={() => setScreen("home")}
+            aria-label="Back to home"
             className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/80 bg-white/88 text-slate-600 shadow-[0_14px_32px_-24px_rgba(69,53,110,0.8)] transition-transform duration-200 hover:-translate-y-0.5"
           >
-            <Settings2 className="h-5 w-5" />
+            <ChevronLeft className="h-5 w-5" />
           </button>
 
           <div className="text-center">
@@ -895,6 +974,97 @@ function shuffle<T>(items: T[]) {
   }
 
   return next
+}
+
+function hasStartedPuzzle(
+  game: GameState,
+  initialEntries: Record<string, string>
+) {
+  if (game.completedIds.length > 0) {
+    return true
+  }
+
+  return Object.keys(game.entries).some((key) => !initialEntries[key])
+}
+
+function getPuzzleStorageKey(puzzleId: string) {
+  return `daily-crossword-progress:${puzzleId}`
+}
+
+function serializeGame(game: GameState) {
+  return JSON.stringify({
+    ...game,
+    feedback: null,
+  })
+}
+
+function loadStoredGame(storageKey: string, puzzleModel: PuzzleModel) {
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as Partial<GameState>
+    const entries = Object.fromEntries(
+      Object.entries(parsed.entries ?? {}).filter(([key, value]) => {
+        return typeof value === "string" && Boolean(puzzleModel.cellData[key])
+      })
+    )
+    const lockSources = Object.fromEntries(
+      Object.entries(parsed.lockSources ?? {}).filter(([, value]) => {
+        return value === "given" || value === "revealed" || value === "solved"
+      })
+    ) as Partial<Record<string, LockSource>>
+    const solvedIds = (parsed.solvedIds ?? []).filter(
+      (clueId): clueId is string => {
+        return typeof clueId === "string" && clueId in puzzleModel.clueById
+      }
+    )
+    const completedIds = (parsed.completedIds ?? []).filter(
+      (clueId): clueId is string => {
+        return typeof clueId === "string" && clueId in puzzleModel.clueById
+      }
+    )
+    const activeClueId =
+      typeof parsed.activeClueId === "string" &&
+      parsed.activeClueId in puzzleModel.clueById
+        ? parsed.activeClueId
+        : puzzleModel.initialGame.activeClueId
+    const activeIndex = clampIndex(
+      typeof parsed.activeIndex === "number"
+        ? parsed.activeIndex
+        : puzzleModel.initialGame.activeIndex,
+      puzzleModel.clueById[activeClueId].cells.length
+    )
+
+    return {
+      ...puzzleModel.initialGame,
+      entries: {
+        ...puzzleModel.initialGame.entries,
+        ...entries,
+      },
+      lockSources: {
+        ...puzzleModel.initialGame.lockSources,
+        ...lockSources,
+      },
+      solvedIds,
+      completedIds,
+      activeClueId,
+      activeIndex,
+      feedback: null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function clampIndex(index: number, length: number) {
+  if (length <= 0) {
+    return 0
+  }
+
+  return Math.max(0, Math.min(index, length - 1))
 }
 
 function formatPuzzleDate(dateKey: string) {
