@@ -6,7 +6,8 @@ import { ChevronLeft, ChevronRight, Delete, Settings2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 type Direction = "across" | "down"
-type LockSource = "given" | "revealed"
+type LockSource = "given" | "revealed" | "solved"
+type FeedbackType = "wrong" | "correct"
 
 type ClueDefinition = {
   id: string
@@ -34,8 +35,15 @@ type GameState = {
   entries: Record<string, string>
   lockSources: Partial<Record<string, LockSource>>
   solvedIds: string[]
+  completedIds: string[]
   activeClueId: string
   activeIndex: number
+}
+
+type FeedbackState = {
+  clueId: string
+  type: FeedbackType
+  stamp: number
 }
 
 const GRID_ROWS = 9
@@ -189,12 +197,18 @@ export default function Page() {
     entries: initialEntries,
     lockSources: givenLocks,
     solvedIds: ["1a"],
+    completedIds: [],
     activeClueId: "2a",
     activeIndex: firstEmptyIndex(clueById["2a"], initialEntries, givenLocks),
   }))
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null)
 
   const activeClue = clueById[game.activeClueId]
   const solvedSet = useMemo(() => new Set(game.solvedIds), [game.solvedIds])
+  const completedSet = useMemo(
+    () => new Set(game.completedIds),
+    [game.completedIds]
+  )
 
   const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
     setGame((current) => {
@@ -223,65 +237,132 @@ export default function Page() {
     [game.activeClueId, selectClue]
   )
 
-  const handleLetter = useCallback((letter: string) => {
-    setGame((current) => {
-      const clue = clueById[current.activeClueId]
-      if (current.solvedIds.includes(clue.id)) {
-        return current
-      }
-
-      const targetIndex = findWritableIndex(
-        clue,
-        current.activeIndex,
-        current.entries,
-        current.lockSources
+  const handleLetter = useCallback(
+    (letter: string) => {
+      setFeedback((current) =>
+        current?.clueId === game.activeClueId ? null : current
       )
-      if (targetIndex === -1) {
-        return current
-      }
 
-      const targetCell = clue.cells[targetIndex]
-      const targetKey = targetCell.key
-      const nextEntries = {
-        ...current.entries,
-        [targetKey]: letter,
-      }
+      const outcome: { feedback: FeedbackState | null } = { feedback: null }
 
-      let nextState: GameState = {
-        ...current,
-        entries: nextEntries,
-        activeIndex: nextCursorIndex(
+      setGame((current) => {
+        const clue = clueById[current.activeClueId]
+        if (current.solvedIds.includes(clue.id)) {
+          return current
+        }
+
+        const targetIndex = findWritableIndex(
           clue,
-          targetIndex,
+          current.activeIndex,
+          current.entries,
+          current.lockSources
+        )
+        if (targetIndex === -1) {
+          return current
+        }
+
+        const targetCell = clue.cells[targetIndex]
+        const targetKey = targetCell.key
+        const nextEntries = {
+          ...current.entries,
+          [targetKey]: letter,
+        }
+
+        let nextState: GameState = {
+          ...current,
+          entries: nextEntries,
+          activeIndex: nextCursorIndex(
+            clue,
+            targetIndex,
+            nextEntries,
+            current.lockSources
+          ),
+        }
+
+        if (!isClueFilled(clue, nextEntries)) {
+          return nextState
+        }
+
+        if (isClueSolved(clue, nextEntries)) {
+          const nextSolvedIds = [...current.solvedIds, clue.id]
+          const nextCompletedIds = [...current.completedIds, clue.id]
+          const frozenLocks = freezeSolvedClue(current.lockSources, clue)
+          const revealOutcome = revealLetters(
+            nextEntries,
+            frozenLocks,
+            nextSolvedIds
+          )
+          const nextClueId = findNextUnsolvedClueId(clue.id, nextSolvedIds)
+
+          outcome.feedback = {
+            clueId: clue.id,
+            type: "correct",
+            stamp: Date.now(),
+          }
+
+          nextState = {
+            ...nextState,
+            entries: revealOutcome.entries,
+            lockSources: revealOutcome.lockSources,
+            solvedIds: nextSolvedIds,
+            completedIds: nextCompletedIds,
+          }
+
+          if (nextClueId) {
+            nextState = {
+              ...nextState,
+              activeClueId: nextClueId,
+              activeIndex: firstEmptyIndex(
+                clueById[nextClueId],
+                revealOutcome.entries,
+                revealOutcome.lockSources
+              ),
+            }
+          }
+
+          return nextState
+        }
+
+        const incorrectIndex = firstIncorrectEditableIndex(
+          clue,
           nextEntries,
           current.lockSources
-        ),
-      }
-
-      if (
-        !current.solvedIds.includes(clue.id) &&
-        isClueSolved(clue, nextEntries)
-      ) {
-        const nextSolvedIds = [...current.solvedIds, clue.id]
-        const revealOutcome = revealLetters(
-          nextEntries,
-          current.lockSources,
-          nextSolvedIds
         )
 
-        nextState = {
+        outcome.feedback = {
+          clueId: clue.id,
+          type: "wrong",
+          stamp: Date.now(),
+        }
+
+        return {
           ...nextState,
-          entries: revealOutcome.entries,
-          lockSources: revealOutcome.lockSources,
-          solvedIds: nextSolvedIds,
+          activeIndex: incorrectIndex === -1 ? targetIndex : incorrectIndex,
+        }
+      })
+
+      const feedbackResult = outcome.feedback
+
+      if (feedbackResult) {
+        setFeedback(feedbackResult)
+
+        if (feedbackResult.type === "correct") {
+          window.setTimeout(() => {
+            setFeedback((current) =>
+              current?.stamp === feedbackResult.stamp ? null : current
+            )
+          }, 520)
         }
       }
-
-      return nextState
-    })
-  }, [])
+    },
+    [game.activeClueId]
+  )
 
   const handleBackspace = useCallback(() => {
+    setFeedback((current) =>
+      current?.clueId === game.activeClueId ? null : current
+    )
+
     setGame((current) => {
       const clue = clueById[current.activeClueId]
       if (current.solvedIds.includes(clue.id)) {
@@ -325,7 +406,7 @@ export default function Page() {
         activeIndex: previousIndex,
       }
     })
-  }, [])
+  }, [game.activeClueId])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -410,13 +491,17 @@ export default function Page() {
               )
               const isCursor = activeClue.cells[game.activeIndex]?.key === key
               const lockSource = game.lockSources[key]
-              const solvedCell = cell.clueIds.some((clueId) =>
-                solvedSet.has(clueId)
+              const completedCell = cell.clueIds.some((clueId) =>
+                completedSet.has(clueId)
               )
+              const feedbackMatch =
+                feedback && cell.clueIds.includes(feedback.clueId)
+                  ? feedback
+                  : null
 
               return (
                 <button
-                  key={key}
+                  key={`${key}-${feedbackMatch?.stamp ?? 0}`}
                   type="button"
                   onClick={() => {
                     const memberships = cell.clueIds
@@ -443,12 +528,17 @@ export default function Page() {
                   className={cn(
                     "relative aspect-square rounded-[16px] border text-lg font-semibold text-slate-700 shadow-[0_18px_35px_-28px_rgba(61,45,93,0.75)] transition-all duration-200",
                     "flex items-center justify-center",
-                    isActive
-                      ? "border-[#f0c29d] bg-[#fde5d2] shadow-[0_22px_42px_-30px_rgba(238,155,108,0.9)]"
-                      : "border-white/90 bg-[#fffaf1]",
+                    feedbackMatch?.type === "wrong"
+                      ? "animate-clue-shake border-[#e8a4a2] bg-[#fff1f0]"
+                      : completedCell
+                        ? "border-[#b9dcc7] bg-[#ebf8ef] shadow-[0_22px_42px_-30px_rgba(110,183,131,0.75)]"
+                        : isActive
+                          ? "border-[#f0c29d] bg-[#fde5d2] shadow-[0_22px_42px_-30px_rgba(238,155,108,0.9)]"
+                          : "border-white/90 bg-[#fffaf1]",
                     isCursor &&
                       "scale-[1.02] border-[#ebaa73] ring-2 ring-[#f6d5bc]",
-                    solvedCell && !isActive && "bg-[#fff7ec]"
+                    feedbackMatch?.type === "correct" &&
+                      "animate-clue-pop shadow-[0_24px_40px_-28px_rgba(110,183,131,0.9)]"
                   )}
                 >
                   {cell.number ? (
@@ -460,8 +550,10 @@ export default function Page() {
                   <span
                     className={cn(
                       "translate-y-[1px] text-[1.3rem] leading-none tracking-[0.06em] transition-colors duration-200",
+                      completedCell && "text-emerald-700",
                       lockSource === "revealed" && "text-teal-600",
                       lockSource === "given" && "text-sky-700",
+                      lockSource === "solved" && "text-emerald-700",
                       !lockSource && entry && "text-slate-700",
                       !entry && "text-transparent"
                     )}
@@ -629,6 +721,23 @@ function isClueSolved(clue: Clue, entries: Record<string, string>) {
   )
 }
 
+function isClueFilled(clue: Clue, entries: Record<string, string>) {
+  return clue.cells.every((cell) => Boolean(entries[cell.key]))
+}
+
+function freezeSolvedClue(
+  lockSources: Partial<Record<string, LockSource>>,
+  clue: Clue
+) {
+  const nextLockSources = { ...lockSources }
+
+  clue.cells.forEach((cell) => {
+    nextLockSources[cell.key] = "solved"
+  })
+
+  return nextLockSources
+}
+
 function firstEmptyIndex(
   clue: Clue,
   entries: Record<string, string>,
@@ -650,28 +759,15 @@ function firstEmptyIndex(
 function findWritableIndex(
   clue: Clue,
   activeIndex: number,
-  entries: Record<string, string>,
+  _entries: Record<string, string>,
   lockSources: Partial<Record<string, LockSource>>
 ) {
   const preferredCell = clue.cells[activeIndex]
-  if (
-    preferredCell &&
-    !entries[preferredCell.key] &&
-    !lockSources[preferredCell.key]
-  ) {
+  if (preferredCell && !lockSources[preferredCell.key]) {
     return activeIndex
   }
 
-  for (let index = activeIndex + 1; index < clue.cells.length; index += 1) {
-    const key = clue.cells[index].key
-    if (!entries[key] && !lockSources[key]) {
-      return index
-    }
-  }
-
-  return clue.cells.findIndex(
-    (cell) => !entries[cell.key] && !lockSources[cell.key]
-  )
+  return clue.cells.findIndex((cell) => !lockSources[cell.key])
 }
 
 function nextCursorIndex(
@@ -687,7 +783,42 @@ function nextCursorIndex(
     }
   }
 
+  for (let index = currentIndex + 1; index < clue.cells.length; index += 1) {
+    const key = clue.cells[index].key
+    if (!lockSources[key]) {
+      return index
+    }
+  }
+
   return currentIndex
+}
+
+function firstIncorrectEditableIndex(
+  clue: Clue,
+  entries: Record<string, string>,
+  lockSources: Partial<Record<string, LockSource>>
+) {
+  return clue.cells.findIndex((cell) => {
+    if (lockSources[cell.key]) {
+      return false
+    }
+
+    return entries[cell.key] !== cellData[cell.key].solution
+  })
+}
+
+function findNextUnsolvedClueId(currentClueId: string, solvedIds: string[]) {
+  const solvedSet = new Set(solvedIds)
+  const currentIndex = clueOrder.indexOf(currentClueId)
+
+  for (let offset = 1; offset < clueOrder.length; offset += 1) {
+    const nextId = clueOrder[(currentIndex + offset) % clueOrder.length]
+    if (!solvedSet.has(nextId)) {
+      return nextId
+    }
+  }
+
+  return null
 }
 
 function previousFilledIndex(

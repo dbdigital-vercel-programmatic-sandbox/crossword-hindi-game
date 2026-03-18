@@ -153,8 +153,53 @@
   }
 }
 
+@keyframes clue-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  20% {
+    transform: translateX(-2px);
+  }
+
+  40% {
+    transform: translateX(2px);
+  }
+
+  60% {
+    transform: translateX(-3px);
+  }
+
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes clue-pop {
+  0% {
+    transform: scale(0.96);
+  }
+
+  60% {
+    transform: scale(1.04);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
 @layer utilities {
   .animate-clue-fade {
     animation: clue-fade 220ms ease-out;
+  }
+
+  .animate-clue-shake {
+    animation: clue-shake 260ms ease-out;
+  }
+
+  .animate-clue-pop {
+    animation: clue-pop 220ms ease-out;
   }
 }
