@@ -3,21 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { ChevronLeft, ChevronRight, Delete, Settings2 } from "lucide-react"
 
+import { crosswordLevels } from "@/data/crossword-levels"
+import {
+  type ClueDefinition,
+  getLocalDateKey,
+  getScheduledPuzzle,
+  msUntilNextLocalMidnight,
+} from "@/lib/crossword-schedule"
 import { cn } from "@/lib/utils"
 
-type Direction = "across" | "down"
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
-
-type ClueDefinition = {
-  id: string
-  number: number
-  direction: Direction
-  clue: string
-  answer: string
-  row: number
-  col: number
-}
 
 type GridCell = {
   row: number
@@ -47,145 +43,17 @@ type FeedbackState = {
   stamp: number
 }
 
-const GRID_ROWS = 9
-const GRID_COLS = 8
-
-const clueDefinitions: ClueDefinition[] = [
-  {
-    id: "1a",
-    number: 1,
-    direction: "across",
-    clue: "Fruit drink",
-    answer: "JUICE",
-    row: 0,
-    col: 2,
-  },
-  {
-    id: "2a",
-    number: 2,
-    direction: "across",
-    clue: "Free-time activity",
-    answer: "HOBBY",
-    row: 1,
-    col: 1,
-  },
-  {
-    id: "3d",
-    number: 3,
-    direction: "down",
-    clue: "Taken temporarily",
-    answer: "BORROWED",
-    row: 1,
-    col: 3,
-  },
-  {
-    id: "4a",
-    number: 4,
-    direction: "across",
-    clue: "Yellow citrus fruits",
-    answer: "LEMONS",
-    row: 2,
-    col: 0,
-  },
-  {
-    id: "5a",
-    number: 5,
-    direction: "across",
-    clue: "Made a loud lion-like sound",
-    answer: "ROARED",
-    row: 3,
-    col: 0,
-  },
-  {
-    id: "6a",
-    number: 6,
-    direction: "across",
-    clue: "Woodland area",
-    answer: "FOREST",
-    row: 4,
-    col: 1,
-  },
-  {
-    id: "7d",
-    number: 7,
-    direction: "down",
-    clue: "Watching closely",
-    answer: "EYING",
-    row: 4,
-    col: 4,
-  },
-  {
-    id: "8a",
-    number: 8,
-    direction: "across",
-    clue: "Long trip",
-    answer: "VOYAGE",
-    row: 5,
-    col: 2,
-  },
-  {
-    id: "9a",
-    number: 9,
-    direction: "across",
-    clue: "Turn smoothly",
-    answer: "SWIVEL",
-    row: 6,
-    col: 2,
-  },
-  {
-    id: "10a",
-    number: 10,
-    direction: "across",
-    clue: "General feeling",
-    answer: "SENSE",
-    row: 7,
-    col: 2,
-  },
-  {
-    id: "11a",
-    number: 11,
-    direction: "across",
-    clue: "Move slightly",
-    answer: "BUDGE",
-    row: 8,
-    col: 1,
-  },
-]
-
-const clues: Clue[] = clueDefinitions.map((clue) => ({
-  ...clue,
-  cells: clue.answer.split("").map((_, index) => {
-    const row = clue.row + (clue.direction === "down" ? index : 0)
-    const col = clue.col + (clue.direction === "across" ? index : 0)
-
-    return { row, col, key: keyFor(row, col) }
-  }),
-}))
-
-const clueOrder = clues.map((clue) => clue.id)
-
-const clueById = Object.fromEntries(
-  clues.map((clue) => [clue.id, clue])
-) as Record<string, Clue>
-
-const cellData = buildCellData(clues)
-
-const givenLocks: Partial<Record<string, LockSource>> = {
-  [keyFor(0, 2)]: "given",
-  [keyFor(0, 3)]: "given",
-  [keyFor(0, 4)]: "given",
-  [keyFor(0, 5)]: "given",
-  [keyFor(0, 6)]: "given",
-  [keyFor(1, 1)]: "given",
-  [keyFor(3, 0)]: "given",
-  [keyFor(4, 2)]: "given",
-  [keyFor(6, 2)]: "given",
-  [keyFor(8, 4)]: "given",
+type PuzzleModel = {
+  GRID_ROWS: number
+  GRID_COLS: number
+  clues: Clue[]
+  clueOrder: string[]
+  clueById: Record<string, Clue>
+  cellData: Record<string, GridCell>
+  givenLocks: Partial<Record<string, LockSource>>
+  initialEntries: Record<string, string>
+  initialGame: GameState
 }
-
-const initialEntries = Object.fromEntries(
-  Object.entries(givenLocks).map(([key]) => [key, cellData[key].solution])
-)
 
 const keyboardRows = [
   "QWERTYUIOP".split(""),
@@ -194,15 +62,32 @@ const keyboardRows = [
 ]
 
 export default function Page() {
-  const [game, setGame] = useState<GameState>(() => ({
-    entries: initialEntries,
-    lockSources: givenLocks,
-    solvedIds: ["1a"],
-    completedIds: [],
-    activeClueId: "2a",
-    activeIndex: firstEmptyIndex(clueById["2a"], initialEntries, givenLocks),
-    feedback: null,
-  }))
+  const [dateKey, setDateKey] = useState(() => getLocalDateKey())
+
+  const scheduledPuzzle = useMemo(
+    () => getScheduledPuzzle(crosswordLevels, dateKey),
+    [dateKey]
+  )
+  const puzzleModel = useMemo(
+    () => buildPuzzleModel(scheduledPuzzle),
+    [scheduledPuzzle]
+  )
+  const { GRID_COLS, GRID_ROWS, cellData, clueById, clueOrder, clues } =
+    puzzleModel
+
+  const [game, setGame] = useState<GameState>(() => puzzleModel.initialGame)
+
+  useEffect(() => {
+    setGame(puzzleModel.initialGame)
+  }, [puzzleModel])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDateKey(getLocalDateKey())
+    }, msUntilNextLocalMidnight())
+
+    return () => window.clearTimeout(timeout)
+  }, [dateKey])
 
   const activeClue = clueById[game.activeClueId]
   const solvedSet = useMemo(() => new Set(game.solvedIds), [game.solvedIds])
@@ -289,16 +174,22 @@ export default function Page() {
         return nextState
       }
 
-      if (isClueSolved(clue, nextEntries)) {
+      if (isClueSolved(clue, cellData, nextEntries)) {
         const nextSolvedIds = [...current.solvedIds, clue.id]
         const nextCompletedIds = [...current.completedIds, clue.id]
         const frozenLocks = freezeSolvedClue(current.lockSources, clue)
         const revealOutcome = revealLetters(
+          clues,
+          cellData,
           nextEntries,
           frozenLocks,
           nextSolvedIds
         )
-        const nextClueId = findNextUnsolvedClueId(clue.id, nextSolvedIds)
+        const nextClueId = findNextUnsolvedClueId(
+          clueOrder,
+          clue.id,
+          nextSolvedIds
+        )
 
         const nextFeedback: FeedbackState = {
           clueId: clue.id,
@@ -332,6 +223,7 @@ export default function Page() {
 
       const incorrectIndex = firstIncorrectEditableIndex(
         clue,
+        cellData,
         nextEntries,
         current.lockSources
       )
@@ -511,7 +403,7 @@ export default function Page() {
               Minimal crossword
             </p>
             <h1 className="text-[clamp(1.45rem,5vw,2rem)] font-semibold tracking-[0.08em] text-slate-800">
-              Level 2
+              {scheduledPuzzle.title}
             </h1>
           </div>
 
@@ -729,7 +621,68 @@ function buildCellData(allClues: Clue[]) {
   return cells
 }
 
+function buildPuzzleModel(puzzle: {
+  rows: number
+  cols: number
+  clues: ClueDefinition[]
+  givenCells: string[]
+}): PuzzleModel {
+  const clues: Clue[] = puzzle.clues.map((clue) => ({
+    ...clue,
+    cells: clue.answer.split("").map((_, index) => {
+      const row = clue.row + (clue.direction === "down" ? index : 0)
+      const col = clue.col + (clue.direction === "across" ? index : 0)
+
+      return { row, col, key: keyFor(row, col) }
+    }),
+  }))
+
+  const clueOrder = clues.map((clue) => clue.id)
+  const clueById = Object.fromEntries(
+    clues.map((clue) => [clue.id, clue])
+  ) as Record<string, Clue>
+  const cellData = buildCellData(clues)
+  const givenLocks = Object.fromEntries(
+    puzzle.givenCells.map((key) => [key, "given"])
+  ) as Partial<Record<string, LockSource>>
+  const initialEntries = Object.fromEntries(
+    Object.keys(givenLocks).map((key) => [key, cellData[key].solution])
+  )
+  const solvedIds = clues
+    .filter((clue) => clue.cells.every((cell) => givenLocks[cell.key]))
+    .map((clue) => clue.id)
+  const firstActiveClueId =
+    clueOrder.find((clueId) => !solvedIds.includes(clueId)) ?? clueOrder[0]
+  const initialGame: GameState = {
+    entries: initialEntries,
+    lockSources: givenLocks,
+    solvedIds,
+    completedIds: [],
+    activeClueId: firstActiveClueId,
+    activeIndex: firstEmptyIndex(
+      clueById[firstActiveClueId],
+      initialEntries,
+      givenLocks
+    ),
+    feedback: null,
+  }
+
+  return {
+    GRID_ROWS: puzzle.rows,
+    GRID_COLS: puzzle.cols,
+    clues,
+    clueOrder,
+    clueById,
+    cellData,
+    givenLocks,
+    initialEntries,
+    initialGame,
+  }
+}
+
 function revealLetters(
+  clues: Clue[],
+  cellData: Record<string, GridCell>,
   entries: Record<string, string>,
   lockSources: Partial<Record<string, LockSource>>,
   solvedIds: string[]
@@ -769,7 +722,11 @@ function revealLetters(
   }
 }
 
-function isClueSolved(clue: Clue, entries: Record<string, string>) {
+function isClueSolved(
+  clue: Clue,
+  cellData: Record<string, GridCell>,
+  entries: Record<string, string>
+) {
   return clue.cells.every(
     (cell) => entries[cell.key] === cellData[cell.key].solution
   )
@@ -849,6 +806,7 @@ function nextCursorIndex(
 
 function firstIncorrectEditableIndex(
   clue: Clue,
+  cellData: Record<string, GridCell>,
   entries: Record<string, string>,
   lockSources: Partial<Record<string, LockSource>>
 ) {
@@ -861,7 +819,11 @@ function firstIncorrectEditableIndex(
   })
 }
 
-function findNextUnsolvedClueId(currentClueId: string, solvedIds: string[]) {
+function findNextUnsolvedClueId(
+  clueOrder: string[],
+  currentClueId: string,
+  solvedIds: string[]
+) {
   const solvedSet = new Set(solvedIds)
   const currentIndex = clueOrder.indexOf(currentClueId)
 
