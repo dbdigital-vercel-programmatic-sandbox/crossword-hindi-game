@@ -91,7 +91,7 @@ const clueDefinitions: ClueDefinition[] = [
     id: "6a",
     number: 6,
     direction: "across",
-    clue: "Current in style",
+    clue: "Woodland area",
     answer: "FOREST",
     row: 4,
     col: 1,
@@ -430,7 +430,9 @@ export default function Page() {
                         ? (memberships.find(
                             (clueId) => clueId !== game.activeClueId
                           ) ?? memberships[0])
-                        : memberships[0]
+                        : (memberships.find(
+                            (clueId) => clueById[clueId].direction === "across"
+                          ) ?? memberships[0])
 
                     const clue = clueById[nextClueId]
                     const preferredIndex = clue.cells.findIndex(
