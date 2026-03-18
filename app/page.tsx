@@ -213,6 +213,10 @@ export default function Page() {
 
   const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
     setGame((current) => {
+      if (current.feedback?.type === "wrong") {
+        return current
+      }
+
       const nextClue = clueById[clueId]
       const nextIndex =
         preferredIndex !== undefined &&
@@ -245,7 +249,10 @@ export default function Page() {
   const handleLetter = useCallback((letter: string) => {
     setGame((current) => {
       const clue = clueById[current.activeClueId]
-      if (current.solvedIds.includes(clue.id)) {
+      if (
+        current.solvedIds.includes(clue.id) ||
+        current.feedback?.type === "wrong"
+      ) {
         return current
       }
 
@@ -338,7 +345,10 @@ export default function Page() {
       return {
         ...nextState,
         feedback: nextFeedback,
-        activeIndex: incorrectIndex === -1 ? targetIndex : incorrectIndex,
+        activeIndex:
+          incorrectIndex === -1
+            ? firstEmptyIndex(clue, nextEntries, current.lockSources)
+            : incorrectIndex,
       }
     })
   }, [])
@@ -346,7 +356,10 @@ export default function Page() {
   const handleBackspace = useCallback(() => {
     setGame((current) => {
       const clue = clueById[current.activeClueId]
-      if (current.solvedIds.includes(clue.id)) {
+      if (
+        current.solvedIds.includes(clue.id) ||
+        current.feedback?.type === "wrong"
+      ) {
         return current
       }
 
@@ -403,6 +416,44 @@ export default function Page() {
           : current
       )
     }, 520)
+
+    return () => window.clearTimeout(timeout)
+  }, [game.feedback])
+
+  useEffect(() => {
+    if (game.feedback?.type !== "wrong") {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setGame((current) => {
+        if (
+          current.feedback?.type !== "wrong" ||
+          current.feedback.stamp !== game.feedback?.stamp
+        ) {
+          return current
+        }
+
+        const clue = clueById[current.feedback.clueId]
+        const clearedEntries = clearEditableClueEntries(
+          current.entries,
+          current.lockSources,
+          clue
+        )
+
+        return {
+          ...current,
+          entries: clearedEntries,
+          activeClueId: clue.id,
+          activeIndex: firstEmptyIndex(
+            clue,
+            clearedEntries,
+            current.lockSources
+          ),
+          feedback: null,
+        }
+      })
+    }, 360)
 
     return () => window.clearTimeout(timeout)
   }, [game.feedback])
@@ -528,7 +579,7 @@ export default function Page() {
                     "relative aspect-square rounded-[16px] border text-lg font-semibold text-slate-700 shadow-[0_18px_35px_-28px_rgba(61,45,93,0.75)] transition-all duration-200",
                     "flex items-center justify-center",
                     feedbackMatch?.type === "wrong"
-                      ? "animate-clue-shake border-[#e8a4a2] bg-[#fff1f0]"
+                      ? "animate-clue-shake border-[#da9290] bg-[#f7cdcb] shadow-[0_22px_42px_-30px_rgba(208,111,111,0.9)]"
                       : completedCell
                         ? "border-[#b9dcc7] bg-[#ebf8ef] shadow-[0_22px_42px_-30px_rgba(110,183,131,0.75)]"
                         : isActive
@@ -554,6 +605,7 @@ export default function Page() {
                       lockSource === "given" && "text-sky-700",
                       lockSource === "solved" && "text-emerald-700",
                       !lockSource && entry && "text-slate-700",
+                      feedbackMatch?.type === "wrong" && "text-rose-700",
                       !entry && "text-transparent"
                     )}
                   >
@@ -818,6 +870,22 @@ function findNextUnsolvedClueId(currentClueId: string, solvedIds: string[]) {
   }
 
   return null
+}
+
+function clearEditableClueEntries(
+  entries: Record<string, string>,
+  lockSources: Partial<Record<string, LockSource>>,
+  clue: Clue
+) {
+  const nextEntries = { ...entries }
+
+  clue.cells.forEach((cell) => {
+    if (!lockSources[cell.key]) {
+      delete nextEntries[cell.key]
+    }
+  })
+
+  return nextEntries
 }
 
 function previousFilledIndex(
