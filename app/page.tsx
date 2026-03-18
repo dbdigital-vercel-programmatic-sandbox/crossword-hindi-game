@@ -38,6 +38,7 @@ type GameState = {
   completedIds: string[]
   activeClueId: string
   activeIndex: number
+  feedback: FeedbackState | null
 }
 
 type FeedbackState = {
@@ -200,8 +201,8 @@ export default function Page() {
     completedIds: [],
     activeClueId: "2a",
     activeIndex: firstEmptyIndex(clueById["2a"], initialEntries, givenLocks),
+    feedback: null,
   }))
-  const [feedback, setFeedback] = useState<FeedbackState | null>(null)
 
   const activeClue = clueById[game.activeClueId]
   const solvedSet = useMemo(() => new Set(game.solvedIds), [game.solvedIds])
@@ -223,6 +224,10 @@ export default function Page() {
         ...current,
         activeClueId: clueId,
         activeIndex: nextIndex,
+        feedback:
+          current.feedback?.clueId === current.activeClueId
+            ? null
+            : current.feedback,
       }
     })
   }, [])
@@ -237,132 +242,108 @@ export default function Page() {
     [game.activeClueId, selectClue]
   )
 
-  const handleLetter = useCallback(
-    (letter: string) => {
-      setFeedback((current) =>
-        current?.clueId === game.activeClueId ? null : current
+  const handleLetter = useCallback((letter: string) => {
+    setGame((current) => {
+      const clue = clueById[current.activeClueId]
+      if (current.solvedIds.includes(clue.id)) {
+        return current
+      }
+
+      const targetIndex = findWritableIndex(
+        clue,
+        current.activeIndex,
+        current.entries,
+        current.lockSources
       )
+      if (targetIndex === -1) {
+        return current
+      }
 
-      const outcome: { feedback: FeedbackState | null } = { feedback: null }
+      const targetCell = clue.cells[targetIndex]
+      const targetKey = targetCell.key
+      const nextEntries = {
+        ...current.entries,
+        [targetKey]: letter,
+      }
 
-      setGame((current) => {
-        const clue = clueById[current.activeClueId]
-        if (current.solvedIds.includes(clue.id)) {
-          return current
-        }
-
-        const targetIndex = findWritableIndex(
+      let nextState: GameState = {
+        ...current,
+        entries: nextEntries,
+        feedback: null,
+        activeIndex: nextCursorIndex(
           clue,
-          current.activeIndex,
-          current.entries,
-          current.lockSources
-        )
-        if (targetIndex === -1) {
-          return current
-        }
-
-        const targetCell = clue.cells[targetIndex]
-        const targetKey = targetCell.key
-        const nextEntries = {
-          ...current.entries,
-          [targetKey]: letter,
-        }
-
-        let nextState: GameState = {
-          ...current,
-          entries: nextEntries,
-          activeIndex: nextCursorIndex(
-            clue,
-            targetIndex,
-            nextEntries,
-            current.lockSources
-          ),
-        }
-
-        if (!isClueFilled(clue, nextEntries)) {
-          return nextState
-        }
-
-        if (isClueSolved(clue, nextEntries)) {
-          const nextSolvedIds = [...current.solvedIds, clue.id]
-          const nextCompletedIds = [...current.completedIds, clue.id]
-          const frozenLocks = freezeSolvedClue(current.lockSources, clue)
-          const revealOutcome = revealLetters(
-            nextEntries,
-            frozenLocks,
-            nextSolvedIds
-          )
-          const nextClueId = findNextUnsolvedClueId(clue.id, nextSolvedIds)
-
-          outcome.feedback = {
-            clueId: clue.id,
-            type: "correct",
-            stamp: Date.now(),
-          }
-
-          nextState = {
-            ...nextState,
-            entries: revealOutcome.entries,
-            lockSources: revealOutcome.lockSources,
-            solvedIds: nextSolvedIds,
-            completedIds: nextCompletedIds,
-          }
-
-          if (nextClueId) {
-            nextState = {
-              ...nextState,
-              activeClueId: nextClueId,
-              activeIndex: firstEmptyIndex(
-                clueById[nextClueId],
-                revealOutcome.entries,
-                revealOutcome.lockSources
-              ),
-            }
-          }
-
-          return nextState
-        }
-
-        const incorrectIndex = firstIncorrectEditableIndex(
-          clue,
+          targetIndex,
           nextEntries,
           current.lockSources
-        )
+        ),
+      }
 
-        outcome.feedback = {
+      if (!isClueFilled(clue, nextEntries)) {
+        return nextState
+      }
+
+      if (isClueSolved(clue, nextEntries)) {
+        const nextSolvedIds = [...current.solvedIds, clue.id]
+        const nextCompletedIds = [...current.completedIds, clue.id]
+        const frozenLocks = freezeSolvedClue(current.lockSources, clue)
+        const revealOutcome = revealLetters(
+          nextEntries,
+          frozenLocks,
+          nextSolvedIds
+        )
+        const nextClueId = findNextUnsolvedClueId(clue.id, nextSolvedIds)
+
+        const nextFeedback: FeedbackState = {
           clueId: clue.id,
-          type: "wrong",
+          type: "correct",
           stamp: Date.now(),
         }
 
-        return {
+        nextState = {
           ...nextState,
-          activeIndex: incorrectIndex === -1 ? targetIndex : incorrectIndex,
+          entries: revealOutcome.entries,
+          lockSources: revealOutcome.lockSources,
+          solvedIds: nextSolvedIds,
+          completedIds: nextCompletedIds,
+          feedback: nextFeedback,
         }
-      })
 
-      const feedbackResult = outcome.feedback
-
-      if (feedbackResult) {
-        setFeedback(feedbackResult)
-
-        if (feedbackResult.type === "correct") {
-          window.setTimeout(() => {
-            setFeedback((current) =>
-              current?.stamp === feedbackResult.stamp ? null : current
-            )
-          }, 520)
+        if (nextClueId) {
+          nextState = {
+            ...nextState,
+            activeClueId: nextClueId,
+            activeIndex: firstEmptyIndex(
+              clueById[nextClueId],
+              revealOutcome.entries,
+              revealOutcome.lockSources
+            ),
+          }
         }
+
+        return nextState
       }
-    },
-    [game.activeClueId]
-  )
+
+      const incorrectIndex = firstIncorrectEditableIndex(
+        clue,
+        nextEntries,
+        current.lockSources
+      )
+
+      const nextFeedback: FeedbackState = {
+        clueId: clue.id,
+        type: "wrong",
+        stamp: Date.now(),
+      }
+
+      return {
+        ...nextState,
+        feedback: nextFeedback,
+        activeIndex: incorrectIndex === -1 ? targetIndex : incorrectIndex,
+      }
+    })
+  }, [])
 
   const handleBackspace = useCallback(() => {
-    setFeedback((current) =>
-      current?.clueId === game.activeClueId ? null : current
-    )
-
     setGame((current) => {
       const clue = clueById[current.activeClueId]
       if (current.solvedIds.includes(clue.id)) {
@@ -382,6 +363,7 @@ export default function Page() {
           return {
             ...current,
             entries: nextEntries,
+            feedback: null,
           }
         }
       }
@@ -404,9 +386,26 @@ export default function Page() {
         ...current,
         entries: nextEntries,
         activeIndex: previousIndex,
+        feedback: null,
       }
     })
-  }, [game.activeClueId])
+  }, [])
+
+  useEffect(() => {
+    if (game.feedback?.type !== "correct") {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setGame((current) =>
+        current.feedback?.stamp === game.feedback?.stamp
+          ? { ...current, feedback: null }
+          : current
+      )
+    }, 520)
+
+    return () => window.clearTimeout(timeout)
+  }, [game.feedback])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -495,8 +494,8 @@ export default function Page() {
                 completedSet.has(clueId)
               )
               const feedbackMatch =
-                feedback && cell.clueIds.includes(feedback.clueId)
-                  ? feedback
+                game.feedback && cell.clueIds.includes(game.feedback.clueId)
+                  ? game.feedback
                   : null
 
               return (
