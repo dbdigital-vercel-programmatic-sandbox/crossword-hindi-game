@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils"
 
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
-type Screen = "home" | "game"
+type Screen = "home" | "game" | "summary"
 
 type GridCell = {
   row: number
@@ -33,6 +33,7 @@ type GameState = {
   lockSources: Partial<Record<string, LockSource>>
   solvedIds: string[]
   completedIds: string[]
+  elapsedSeconds: number
   activeClueId: string
   activeIndex: number
   feedback: FeedbackState | null
@@ -120,6 +121,16 @@ export default function Page() {
     () => hasStartedPuzzle(game, puzzleModel.initialEntries),
     [game, puzzleModel.initialEntries]
   )
+  const isPuzzleComplete = game.solvedIds.length === clues.length
+  const timerLabel = useMemo(
+    () => formatElapsedTime(game.elapsedSeconds),
+    [game.elapsedSeconds]
+  )
+
+  const resetCurrentPuzzle = useCallback(() => {
+    setGame(puzzleModel.initialGame)
+    setScreen("game")
+  }, [puzzleModel.initialGame])
 
   const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
     setGame((current) => {
@@ -186,6 +197,7 @@ export default function Page() {
       let nextState: GameState = {
         ...current,
         entries: nextEntries,
+        solvedIds: getSolvedClueIds(clues, cellData, nextEntries),
         feedback: null,
         activeIndex: nextCursorIndex(
           clue,
@@ -200,15 +212,21 @@ export default function Page() {
       }
 
       if (isClueSolved(clue, cellData, nextEntries)) {
-        const nextSolvedIds = [...current.solvedIds, clue.id]
-        const nextCompletedIds = [...current.completedIds, clue.id]
+        const nextCompletedIds = current.completedIds.includes(clue.id)
+          ? current.completedIds
+          : [...current.completedIds, clue.id]
         const frozenLocks = freezeSolvedClue(current.lockSources, clue)
         const revealOutcome = revealLetters(
           clues,
           cellData,
           nextEntries,
           frozenLocks,
-          nextSolvedIds
+          nextState.solvedIds
+        )
+        const nextSolvedIds = getSolvedClueIds(
+          clues,
+          cellData,
+          revealOutcome.entries
         )
         const nextClueId = findNextUnsolvedClueId(
           clueOrder,
@@ -293,6 +311,7 @@ export default function Page() {
           return {
             ...current,
             entries: nextEntries,
+            solvedIds: getSolvedClueIds(clues, cellData, nextEntries),
             feedback: null,
           }
         }
@@ -315,6 +334,7 @@ export default function Page() {
       return {
         ...current,
         entries: nextEntries,
+        solvedIds: getSolvedClueIds(clues, cellData, nextEntries),
         activeIndex: previousIndex,
         feedback: null,
       }
@@ -374,6 +394,45 @@ export default function Page() {
 
     return () => window.clearTimeout(timeout)
   }, [game.feedback])
+
+  useEffect(() => {
+    if (screen !== "game" || isPuzzleComplete) {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      setGame((current) => ({
+        ...current,
+        elapsedSeconds: current.elapsedSeconds + 1,
+      }))
+    }, 1000)
+
+    return () => window.clearInterval(interval)
+  }, [isPuzzleComplete, screen])
+
+  useEffect(() => {
+    if (screen === "game" && isPuzzleComplete) {
+      setScreen("summary")
+    }
+  }, [isPuzzleComplete, screen])
+
+  useEffect(() => {
+    if (screen === "game") {
+      return
+    }
+
+    const onResetKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "r") {
+        return
+      }
+
+      event.preventDefault()
+      resetCurrentPuzzle()
+    }
+
+    window.addEventListener("keydown", onResetKeyDown)
+    return () => window.removeEventListener("keydown", onResetKeyDown)
+  }, [resetCurrentPuzzle, screen])
 
   useEffect(() => {
     if (screen !== "game") {
@@ -445,11 +504,7 @@ export default function Page() {
               </div>
 
               <p className="rounded-full bg-[#f6f0ff] px-3 py-1 text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
-                {game.solvedIds.length === clues.length
-                  ? "Done"
-                  : hasProgress
-                    ? "Saved"
-                    : "New"}
+                {isPuzzleComplete ? "Done" : hasProgress ? "Saved" : "New"}
               </p>
             </div>
 
@@ -458,8 +513,83 @@ export default function Page() {
               onClick={() => setScreen("game")}
               className="flex h-14 w-full items-center justify-center rounded-[22px] bg-slate-800 text-sm font-semibold tracking-[0.12em] text-white uppercase shadow-[0_18px_40px_-28px_rgba(15,23,42,0.9)] transition-transform duration-200 hover:-translate-y-0.5"
             >
-              {hasProgress ? "Continue" : "Play"}
+              {isPuzzleComplete
+                ? "View summary"
+                : hasProgress
+                  ? "Continue"
+                  : "Play"}
             </button>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  if (screen === "summary") {
+    return (
+      <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(18px,4vw,30px)] py-[clamp(18px,4vh,34px)]">
+        <div className="relative flex h-full flex-col justify-between overflow-hidden">
+          <div className="pointer-events-none absolute inset-x-4 top-0 h-40 rounded-full bg-[#e8def8]/55 blur-3xl" />
+
+          <div className="relative flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
+                Daily crossword
+              </p>
+              <h1 className="mt-3 text-[clamp(2.3rem,9vw,4rem)] leading-[0.92] font-semibold tracking-[-0.04em] text-slate-800">
+                Complete
+              </h1>
+              <p className="mt-4 text-sm leading-6 text-slate-500">
+                {displayDate}
+              </p>
+            </div>
+
+            <div className="rounded-[22px] border border-white/80 bg-white/86 px-4 py-3 text-right shadow-[0_18px_40px_-30px_rgba(77,55,118,0.45)]">
+              <p className="text-[10px] font-semibold tracking-[0.22em] text-slate-400 uppercase">
+                Time
+              </p>
+              <p className="mt-1 text-xl font-semibold text-slate-800">
+                {timerLabel}
+              </p>
+            </div>
+          </div>
+
+          <div className="relative space-y-4 rounded-[30px] border border-white/75 bg-white/72 p-5 shadow-[0_28px_80px_-40px_rgba(77,55,118,0.45)] backdrop-blur-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-slate-700">
+                  You finished today&apos;s puzzle
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {clues.length}/{clues.length} words solved
+                </p>
+              </div>
+
+              <p className="rounded-full bg-[#edf7ee] px-3 py-1 text-xs font-semibold tracking-[0.18em] text-emerald-700 uppercase">
+                Complete
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setScreen("home")}
+                className="flex h-14 items-center justify-center rounded-[22px] border border-white/80 bg-white/92 text-sm font-semibold tracking-[0.1em] text-slate-700 uppercase shadow-[0_18px_34px_-28px_rgba(66,50,104,0.5)] transition-transform duration-200 hover:-translate-y-0.5"
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                onClick={resetCurrentPuzzle}
+                className="flex h-14 items-center justify-center rounded-[22px] bg-slate-800 text-sm font-semibold tracking-[0.1em] text-white uppercase shadow-[0_18px_40px_-28px_rgba(15,23,42,0.9)] transition-transform duration-200 hover:-translate-y-0.5"
+              >
+                Play again
+              </button>
+            </div>
+
+            <p className="text-center text-xs font-medium text-slate-400">
+              Press `r` to reset and replay
+            </p>
           </div>
         </div>
       </main>
@@ -490,7 +620,14 @@ export default function Page() {
             </h1>
           </div>
 
-          <div className="h-10 w-10 rounded-2xl border border-transparent" />
+          <div className="rounded-2xl border border-white/80 bg-white/86 px-3 py-2 text-right shadow-[0_14px_32px_-24px_rgba(69,53,110,0.7)]">
+            <p className="text-[9px] font-semibold tracking-[0.2em] text-slate-400 uppercase">
+              Time
+            </p>
+            <p className="mt-0.5 text-sm font-semibold text-slate-700">
+              {timerLabel}
+            </p>
+          </div>
         </div>
 
         <section className="relative mt-[clamp(10px,1.8vh,18px)] flex min-h-0 flex-1 items-center justify-center">
@@ -518,7 +655,7 @@ export default function Page() {
                 const isCursor = activeClue.cells[game.activeIndex]?.key === key
                 const lockSource = game.lockSources[key]
                 const completedCell = cell.clueIds.some((clueId) =>
-                  completedSet.has(clueId)
+                  solvedSet.has(clueId)
                 )
                 const feedbackMatch =
                   game.feedback && cell.clueIds.includes(game.feedback.clueId)
@@ -731,9 +868,7 @@ function buildPuzzleModel(puzzle: {
   const initialEntries = Object.fromEntries(
     Object.keys(givenLocks).map((key) => [key, cellData[key].solution])
   )
-  const solvedIds = clues
-    .filter((clue) => clue.cells.every((cell) => givenLocks[cell.key]))
-    .map((clue) => clue.id)
+  const solvedIds = getSolvedClueIds(clues, cellData, initialEntries)
   const firstActiveClueId =
     clueOrder.find((clueId) => !solvedIds.includes(clueId)) ?? clueOrder[0]
   const initialGame: GameState = {
@@ -741,6 +876,7 @@ function buildPuzzleModel(puzzle: {
     lockSources: givenLocks,
     solvedIds,
     completedIds: [],
+    elapsedSeconds: 0,
     activeClueId: firstActiveClueId,
     activeIndex: firstEmptyIndex(
       clueById[firstActiveClueId],
@@ -980,7 +1116,7 @@ function hasStartedPuzzle(
   game: GameState,
   initialEntries: Record<string, string>
 ) {
-  if (game.completedIds.length > 0) {
+  if (game.completedIds.length > 0 || game.elapsedSeconds > 0) {
     return true
   }
 
@@ -1016,11 +1152,6 @@ function loadStoredGame(storageKey: string, puzzleModel: PuzzleModel) {
         return value === "given" || value === "revealed" || value === "solved"
       })
     ) as Partial<Record<string, LockSource>>
-    const solvedIds = (parsed.solvedIds ?? []).filter(
-      (clueId): clueId is string => {
-        return typeof clueId === "string" && clueId in puzzleModel.clueById
-      }
-    )
     const completedIds = (parsed.completedIds ?? []).filter(
       (clueId): clueId is string => {
         return typeof clueId === "string" && clueId in puzzleModel.clueById
@@ -1037,19 +1168,30 @@ function loadStoredGame(storageKey: string, puzzleModel: PuzzleModel) {
         : puzzleModel.initialGame.activeIndex,
       puzzleModel.clueById[activeClueId].cells.length
     )
+    const elapsedSeconds =
+      typeof parsed.elapsedSeconds === "number" && parsed.elapsedSeconds >= 0
+        ? Math.floor(parsed.elapsedSeconds)
+        : 0
+    const mergedEntries = {
+      ...puzzleModel.initialGame.entries,
+      ...entries,
+    }
+    const solvedIds = getSolvedClueIds(
+      puzzleModel.clues,
+      puzzleModel.cellData,
+      mergedEntries
+    )
 
     return {
       ...puzzleModel.initialGame,
-      entries: {
-        ...puzzleModel.initialGame.entries,
-        ...entries,
-      },
+      entries: mergedEntries,
       lockSources: {
         ...puzzleModel.initialGame.lockSources,
         ...lockSources,
       },
       solvedIds,
       completedIds,
+      elapsedSeconds,
       activeClueId,
       activeIndex,
       feedback: null,
@@ -1065,6 +1207,28 @@ function clampIndex(index: number, length: number) {
   }
 
   return Math.max(0, Math.min(index, length - 1))
+}
+
+function getSolvedClueIds(
+  clues: Clue[],
+  cellData: Record<string, GridCell>,
+  entries: Record<string, string>
+) {
+  return clues
+    .filter((clue) =>
+      clue.cells.every(
+        (cell) => entries[cell.key] === cellData[cell.key].solution
+      )
+    )
+    .map((clue) => clue.id)
+}
+
+function formatElapsedTime(totalSeconds: number) {
+  const safeSeconds = Math.max(0, totalSeconds)
+  const minutes = Math.floor(safeSeconds / 60)
+  const seconds = safeSeconds % 60
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
 }
 
 function formatPuzzleDate(dateKey: string) {
