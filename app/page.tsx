@@ -1,5 +1,6 @@
 "use client"
 
+import { Inter, Roboto } from "next/font/google"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { ChevronLeft, ChevronRight, Delete } from "lucide-react"
 
@@ -11,6 +12,12 @@ import {
   msUntilNextLocalMidnight,
 } from "@/lib/crossword-schedule"
 import { cn } from "@/lib/utils"
+
+const homeTitleFont = Inter({ subsets: ["latin"], weight: ["800"] })
+const homeBodyFont = Roboto({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+})
 
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
@@ -113,9 +120,10 @@ export default function Page() {
     () => new Set(game.completedIds),
     [game.completedIds]
   )
-  const displayDate = useMemo(
-    () => formatPuzzleDate(scheduledPuzzle.date),
-    [scheduledPuzzle.date]
+  const displayDate = useMemo(() => formatPuzzleDate(dateKey), [dateKey])
+  const displayLongDate = useMemo(
+    () => formatPuzzleDateLong(dateKey),
+    [dateKey]
   )
   const hasProgress = useMemo(
     () => hasStartedPuzzle(game, puzzleModel.initialEntries),
@@ -474,51 +482,73 @@ export default function Page() {
 
   if (screen === "home") {
     return (
-      <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(18px,4vw,30px)] py-[clamp(18px,4vh,34px)]">
-        <div className="relative flex h-full flex-col justify-between overflow-hidden">
-          <div className="pointer-events-none absolute inset-x-4 top-0 h-40 rounded-full bg-[#e8def8]/55 blur-3xl" />
-
-          <div className="relative">
-            <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
-              Daily crossword
-            </p>
-            <h1 className="mt-3 text-[clamp(2.4rem,10vw,4.4rem)] leading-[0.92] font-semibold tracking-[-0.04em] text-slate-800">
-              {displayDate}
-            </h1>
-            <p className="mt-4 max-w-xs text-sm leading-6 text-slate-500">
-              One puzzle per day, saved automatically on this device.
-            </p>
-          </div>
-
-          <div className="relative space-y-4 rounded-[30px] border border-white/75 bg-white/72 p-5 shadow-[0_28px_80px_-40px_rgba(77,55,118,0.45)] backdrop-blur-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-slate-700">
-                  {hasProgress
-                    ? "Resume today&apos;s puzzle"
-                    : "Start today&apos;s puzzle"}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {game.solvedIds.length}/{clues.length} words solved
-                </p>
+      <main className="inline-flex h-svh w-full items-center justify-start gap-[10px] overflow-hidden bg-[#f6f0d7]">
+        <div className="flex h-full flex-1 items-center justify-center gap-[10px] overflow-hidden bg-[#f6f0d7] px-[30px] py-[100px]">
+          <div className="inline-flex w-full max-w-[340px] flex-1 flex-col items-center justify-start gap-[20px]">
+            <div className="flex w-full flex-col items-center justify-start gap-[16px] self-stretch">
+              <div className="flex w-full flex-col items-center justify-start gap-[20px] self-stretch">
+                <HomeMascot />
+                <div
+                  className={cn(
+                    homeTitleFont.className,
+                    "flex w-full flex-col justify-center self-stretch text-center text-[28px] font-extrabold text-black"
+                  )}
+                >
+                  CrossWord
+                </div>
               </div>
 
-              <p className="rounded-full bg-[#f6f0ff] px-3 py-1 text-xs font-semibold tracking-[0.18em] text-slate-500 uppercase">
-                {isPuzzleComplete ? "Done" : hasProgress ? "Saved" : "New"}
-              </p>
+              <div className="flex w-full flex-col items-start justify-start gap-[10px] self-stretch">
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "flex w-full flex-col justify-center self-stretch text-center text-[18px] leading-[26px] font-normal text-black"
+                  )}
+                >
+                  Connect the dots, fill the grid
+                </div>
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "flex w-full flex-col justify-center self-stretch text-center text-[14px] leading-[22px] font-semibold text-black"
+                  )}
+                >
+                  {displayLongDate}
+                </div>
+              </div>
             </div>
 
             <button
               type="button"
-              onClick={() => setScreen("game")}
-              className="flex h-14 w-full items-center justify-center rounded-[22px] bg-slate-800 text-sm font-semibold tracking-[0.12em] text-white uppercase shadow-[0_18px_40px_-28px_rgba(15,23,42,0.9)] transition-transform duration-200 hover:-translate-y-0.5"
+              onClick={() => setScreen(isPuzzleComplete ? "summary" : "game")}
+              className="inline-flex h-[56px] w-full items-center justify-center gap-[10px] self-stretch rounded-[12px] bg-black px-[73px] py-[12px]"
             >
-              {isPuzzleComplete
-                ? "View summary"
-                : hasProgress
-                  ? "Continue"
-                  : "Play"}
+              <span
+                className={cn(
+                  homeBodyFont.className,
+                  "flex flex-col justify-center text-center text-[20px] leading-[30px] font-semibold text-white"
+                )}
+              >
+                {isPuzzleComplete
+                  ? "View Summary"
+                  : hasProgress
+                    ? "Continue Game"
+                    : "Start Game"}
+              </span>
             </button>
+
+            {(hasProgress || isPuzzleComplete) && (
+              <p
+                className={cn(
+                  homeBodyFont.className,
+                  "text-center text-[12px] leading-[18px] font-medium text-black/60"
+                )}
+              >
+                {isPuzzleComplete
+                  ? `Finished in ${timerLabel}`
+                  : `${game.solvedIds.length}/${clues.length} words solved`}
+              </p>
+            )}
           </div>
         </div>
       </main>
@@ -812,6 +842,22 @@ function KeyButton({
     >
       {value}
     </button>
+  )
+}
+
+function HomeMascot() {
+  return (
+    <div className="h-[100px] w-[100px]">
+      <div className="relative h-full w-full rounded-[20px] bg-[#39d66f] shadow-[inset_0_0_0_4px_rgba(255,255,255,0.25)]">
+        <div className="absolute top-[10px] left-[10px] h-[16px] w-[16px] rounded-full bg-black" />
+        <div className="absolute top-[10px] right-[10px] h-[16px] w-[16px] rounded-full bg-black" />
+        <div className="absolute top-[24px] left-[15px] h-[14px] w-[58px] rounded-[4px] bg-[#ffb899]" />
+        <div className="absolute top-[36px] left-[19px] h-[12px] w-[50px] rounded-[4px] bg-[#fff4eb]" />
+        <div className="absolute top-[49px] left-[37px] h-[18px] w-[18px] rounded-full bg-black" />
+        <div className="absolute bottom-[22px] left-[10px] h-[14px] w-[58px] rounded-[4px] bg-[#ffb899]" />
+        <div className="absolute bottom-[10px] left-[19px] h-[12px] w-[50px] rounded-[4px] bg-[#fff4eb]" />
+      </div>
+    </div>
   )
 }
 
@@ -1237,4 +1283,13 @@ function formatPuzzleDate(dateKey: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${dateKey}T00:00:00`))
+}
+
+function formatPuzzleDateLong(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00`)
+  const day = String(date.getDate()).padStart(2, "0")
+  const month = new Intl.DateTimeFormat("en-US", { month: "long" }).format(date)
+  const year = date.getFullYear()
+
+  return `${day} ${month}, ${year}`
 }
