@@ -663,7 +663,7 @@ export default function Page() {
           </div>
         </div>
 
-        <section className="flex w-full flex-col items-start justify-start self-stretch">
+        <section className="flex w-full flex-col items-center justify-start self-stretch">
           <div className="grid w-full grid-cols-8 gap-[3.92px]">
             {Array.from({ length: GRID_ROWS * GRID_COLS }, (_, index) => {
               const row = Math.floor(index / GRID_COLS)
@@ -760,77 +760,80 @@ export default function Page() {
           </div>
         </section>
 
-        <section
-          className={cn(
-            homeTitleFont.className,
-            "inline-flex w-full items-center justify-between self-stretch overflow-hidden rounded-[3px] bg-[#89986D] px-[5px] py-[8px]"
-          )}
-        >
-          <button
-            type="button"
-            onClick={() => cycleClue(-1)}
-            aria-label="Previous clue"
-            className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
+        <div className="mt-auto flex w-full flex-col gap-[15px] self-stretch">
+          <section
+            className={cn(
+              homeTitleFont.className,
+              "inline-flex w-full items-center justify-between self-stretch overflow-hidden rounded-[3px] bg-[#89986D] px-[5px] py-[8px]"
+            )}
           >
-            <ChevronLeft
-              className="absolute top-[6px] left-[8px] h-[12px] w-[6.85px]"
-              strokeWidth={3}
-            />
-          </button>
-
-          <div
-            key={activeClue.id}
-            className="animate-clue-fade flex flex-1 flex-col items-start justify-start gap-[5px] px-[8px]"
-          >
-            <div className="text-[11px] font-semibold tracking-[2.2px] text-[#C5D89D] uppercase">
-              Current Clue
-            </div>
-            <div className="text-[16px] font-semibold text-[#F6F0D7]">
-              {activeClue.number}
-              {activeClue.direction === "across" ? "a" : "d"}. {activeClue.clue}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => cycleClue(1)}
-            aria-label="Next clue"
-            className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
-          >
-            <ChevronRight
-              className="absolute top-[6px] left-[9px] h-[12px] w-[6.85px]"
-              strokeWidth={3}
-            />
-          </button>
-        </section>
-
-        <section className="mt-auto flex w-full flex-col items-center justify-center gap-[8.89px] self-stretch rounded-[10px] bg-[rgba(91,76,12,0.10)] p-[10px]">
-          <div className="grid w-full grid-cols-10 gap-[4.65px]">
-            {keyboardRows[0].map((key) => (
-              <KeyButton key={key} value={key} onPress={handleLetter} />
-            ))}
-          </div>
-
-          <div className="mx-[30px] grid w-[calc(100%-60px)] grid-cols-9 gap-[4.65px] self-stretch">
-            {keyboardRows[1].map((key) => (
-              <KeyButton key={key} value={key} onPress={handleLetter} />
-            ))}
-          </div>
-
-          <div className="mx-[43px] grid w-[calc(100%-86px)] grid-cols-[repeat(7,minmax(0,1fr))_1.5fr] gap-[4.65px] self-stretch">
-            {keyboardRows[2].map((key) => (
-              <KeyButton key={key} value={key} onPress={handleLetter} />
-            ))}
             <button
               type="button"
-              onClick={handleBackspace}
-              className="inline-flex h-[33.96px] w-full items-center justify-center rounded-[4.85px] bg-[#D9E2F8] text-[#1B1B1D]"
-              aria-label="Backspace"
+              onClick={() => cycleClue(-1)}
+              aria-label="Previous clue"
+              className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
             >
-              <Delete className="h-[19.4px] w-[19.4px]" />
+              <ChevronLeft
+                className="absolute top-[6px] left-[8px] h-[12px] w-[6.85px]"
+                strokeWidth={3}
+              />
             </button>
-          </div>
-        </section>
+
+            <div
+              key={activeClue.id}
+              className="animate-clue-fade flex flex-1 flex-col items-start justify-start gap-[5px] px-[8px]"
+            >
+              <div className="text-[11px] font-semibold tracking-[2.2px] text-[#C5D89D] uppercase">
+                Current Clue
+              </div>
+              <div className="text-[16px] font-semibold text-[#F6F0D7]">
+                {activeClue.number}
+                {activeClue.direction === "across" ? "a" : "d"}.{" "}
+                {activeClue.clue}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => cycleClue(1)}
+              aria-label="Next clue"
+              className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
+            >
+              <ChevronRight
+                className="absolute top-[6px] left-[9px] h-[12px] w-[6.85px]"
+                strokeWidth={3}
+              />
+            </button>
+          </section>
+
+          <section className="flex w-full flex-col items-center justify-center gap-[8.89px] self-stretch rounded-[10px] bg-[rgba(91,76,12,0.10)] p-[10px]">
+            <div className="grid w-full grid-cols-10 gap-[4.65px]">
+              {keyboardRows[0].map((key) => (
+                <KeyButton key={key} value={key} onPress={handleLetter} />
+              ))}
+            </div>
+
+            <div className="mx-[30px] grid w-[calc(100%-60px)] grid-cols-9 gap-[4.65px] self-stretch">
+              {keyboardRows[1].map((key) => (
+                <KeyButton key={key} value={key} onPress={handleLetter} />
+              ))}
+            </div>
+
+            <div className="mx-[43px] grid w-[calc(100%-86px)] grid-cols-[repeat(7,minmax(0,1fr))_1.5fr] gap-[4.65px] self-stretch">
+              {keyboardRows[2].map((key) => (
+                <KeyButton key={key} value={key} onPress={handleLetter} />
+              ))}
+              <button
+                type="button"
+                onClick={handleBackspace}
+                className="inline-flex h-[33.96px] w-full items-center justify-center rounded-[4.85px] bg-[#D9E2F8] text-[#1B1B1D]"
+                aria-label="Backspace"
+              >
+                <Delete className="h-[19.4px] w-[19.4px]" />
+              </button>
+            </div>
+          </section>
+        </div>
       </div>
     </main>
   )
