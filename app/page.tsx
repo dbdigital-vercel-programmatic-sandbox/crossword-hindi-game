@@ -2,7 +2,7 @@
 
 import { Inter, Noto_Sans, Roboto } from "next/font/google"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronLeft, ChevronRight, Clock3, Delete } from "lucide-react"
+import { ChevronLeft, ChevronRight, Clock3, Delete, House } from "lucide-react"
 
 import { crosswordLevels } from "@/data/crossword-levels"
 import {
@@ -26,6 +26,12 @@ const gameFont = Noto_Sans({
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
 type Screen = "home" | "game" | "summary"
+
+type StreakDay = {
+  label: string
+  state: "complete" | "missed" | "pending"
+  isToday: boolean
+}
 
 type GridCell = {
   row: number
@@ -91,6 +97,9 @@ export default function Page() {
   const [game, setGame] = useState<GameState>(() => puzzleModel.initialGame)
   const [screen, setScreen] = useState<Screen>("home")
   const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
+  const [completionHistory, setCompletionHistory] = useState<
+    Record<string, boolean>
+  >({})
   const storageKey = useMemo(
     () => getPuzzleStorageKey(scheduledPuzzle.id),
     [scheduledPuzzle.id]
@@ -108,7 +117,12 @@ export default function Page() {
     }
 
     window.localStorage.setItem(storageKey, serializeGame(game))
+    setCompletionHistory(readCompletionHistory(crosswordLevels))
   }, [game, loadedStorageKey, storageKey])
+
+  useEffect(() => {
+    setCompletionHistory(readCompletionHistory(crosswordLevels))
+  }, [])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -137,6 +151,17 @@ export default function Page() {
   const timerLabel = useMemo(
     () => formatElapsedTime(game.elapsedSeconds),
     [game.elapsedSeconds]
+  )
+  const weeklyStreakDays = useMemo(
+    () => buildWeeklyStreakDays(dateKey, completionHistory, isPuzzleComplete),
+    [completionHistory, dateKey, isPuzzleComplete]
+  )
+  const nextChallengeDate = useMemo(
+    () =>
+      formatNextChallengeDate(
+        getNextChallengeDateKey(dateKey, crosswordLevels)
+      ),
+    [dateKey]
   )
 
   const resetCurrentPuzzle = useCallback(() => {
@@ -561,69 +586,153 @@ export default function Page() {
 
   if (screen === "summary") {
     return (
-      <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(18px,4vw,30px)] py-[clamp(18px,4vh,34px)]">
-        <div className="relative flex h-full flex-col justify-between overflow-hidden">
-          <div className="pointer-events-none absolute inset-x-4 top-0 h-40 rounded-full bg-[#e8def8]/55 blur-3xl" />
-
-          <div className="relative flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
-                Daily crossword
-              </p>
-              <h1 className="mt-3 text-[clamp(2.3rem,9vw,4rem)] leading-[0.92] font-semibold tracking-[-0.04em] text-slate-800">
-                Complete
-              </h1>
-              <p className="mt-4 text-sm leading-6 text-slate-500">
-                {displayDate}
-              </p>
+      <main className="inline-flex h-svh w-full items-center justify-start gap-[10px] overflow-hidden bg-[#F6F0D7]">
+        <div className="mx-auto flex h-full w-full max-w-[390px] flex-1 items-center justify-center gap-[10px] overflow-hidden bg-[#F6F0D7] px-[16px] py-[100px]">
+          <div className="inline-flex w-full flex-1 flex-col items-center justify-start gap-[18px]">
+            <div className="flex w-full flex-col items-center justify-start gap-[12px] self-stretch">
+              <SummaryCelebrationIcon />
+              <div className="flex w-full flex-col items-center justify-start gap-[4px] self-stretch">
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "w-full text-center text-[24px] leading-[36px] font-extrabold text-black"
+                  )}
+                >
+                  Congratulations!
+                </div>
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "w-full text-center text-[16px] leading-[24px] font-normal text-black"
+                  )}
+                >
+                  You have completed the challenge
+                </div>
+              </div>
             </div>
 
-            <div className="rounded-[22px] border border-white/80 bg-white/86 px-4 py-3 text-right shadow-[0_18px_40px_-30px_rgba(77,55,118,0.45)]">
-              <p className="text-[10px] font-semibold tracking-[0.22em] text-slate-400 uppercase">
-                Time
-              </p>
-              <p className="mt-1 text-xl font-semibold text-slate-800">
-                {timerLabel}
-              </p>
-            </div>
-          </div>
-
-          <div className="relative space-y-4 rounded-[30px] border border-white/75 bg-white/72 p-5 shadow-[0_28px_80px_-40px_rgba(77,55,118,0.45)] backdrop-blur-xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-slate-700">
-                  You finished today&apos;s puzzle
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  {clues.length}/{clues.length} words solved
-                </p>
+            <div className="flex w-full flex-col items-start justify-start gap-[14px] self-stretch">
+              <div className="inline-flex w-full items-center justify-between self-stretch rounded-[5px] bg-white p-[10px]">
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "text-[18px] leading-[26px] font-extrabold text-[#2B2B2B]"
+                  )}
+                >
+                  Total Time
+                </div>
+                <div className="flex items-center justify-start gap-[4px]">
+                  <Clock3
+                    className="h-[24px] w-[24px] text-[#454A4E]"
+                    strokeWidth={2.2}
+                  />
+                  <div
+                    className={cn(
+                      homeBodyFont.className,
+                      "text-right text-[20px] leading-[26px] font-extrabold text-[#F05C21]"
+                    )}
+                  >
+                    {timerLabel.replace(/^0/, "")}
+                  </div>
+                </div>
               </div>
 
-              <p className="rounded-full bg-[#edf7ee] px-3 py-1 text-xs font-semibold tracking-[0.18em] text-emerald-700 uppercase">
-                Complete
-              </p>
+              <div className="flex w-full flex-col items-center justify-start gap-[12px] self-stretch rounded-[12px] bg-white px-[10px] py-[12px]">
+                <div className="inline-flex w-full items-center justify-between self-stretch overflow-hidden">
+                  <div
+                    className={cn(
+                      homeBodyFont.className,
+                      "text-[18px] leading-[26px] font-extrabold text-[#2B2B2B]"
+                    )}
+                  >
+                    Weekly Streak
+                  </div>
+                  <FlameBadge />
+                </div>
+
+                <div className="inline-flex w-full items-center justify-between self-stretch">
+                  {weeklyStreakDays.map((day: StreakDay) => (
+                    <div
+                      key={day.label}
+                      className="inline-flex w-[32px] flex-col items-center justify-start"
+                    >
+                      <div
+                        className={cn(
+                          "relative h-[24px] w-[24px] overflow-hidden",
+                          day.isToday &&
+                            day.state === "complete" &&
+                            "before:absolute before:-inset-[12px] before:rounded-full before:bg-[radial-gradient(circle,rgba(62,158,62,0.33)_0%,rgba(62,158,62,0)_100%)] before:content-['']"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "absolute top-[2px] left-[2px] h-[20px] w-[20px] rounded-full",
+                            day.state === "complete"
+                              ? "bg-[#3E9E3E]"
+                              : day.state === "missed"
+                                ? "bg-[#F44336]"
+                                : "bg-[#BEBEBE]"
+                          )}
+                        />
+                      </div>
+                      <div className="inline-flex items-center justify-center gap-[10px] self-stretch p-[4px]">
+                        <div
+                          className={cn(
+                            homeTitleFont.className,
+                            "text-center text-[10px] font-bold uppercase",
+                            day.isToday
+                              ? "text-[#F05C21]"
+                              : day.state === "pending"
+                                ? "text-[#808080]"
+                                : "text-[#2B2B2B]"
+                          )}
+                        >
+                          {day.label}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setScreen("home")}
-                className="flex h-14 items-center justify-center rounded-[22px] border border-white/80 bg-white/92 text-sm font-semibold tracking-[0.1em] text-slate-700 uppercase shadow-[0_18px_34px_-28px_rgba(66,50,104,0.5)] transition-transform duration-200 hover:-translate-y-0.5"
+            <div className="flex h-[54px] w-full flex-col items-center justify-start self-stretch">
+              <div
+                className={cn(
+                  homeBodyFont.className,
+                  "flex-1 self-stretch text-center text-[16px] leading-[24px] font-normal text-black"
+                )}
               >
-                Home
-              </button>
-              <button
-                type="button"
-                onClick={resetCurrentPuzzle}
-                className="flex h-14 items-center justify-center rounded-[22px] bg-slate-800 text-sm font-semibold tracking-[0.1em] text-white uppercase shadow-[0_18px_40px_-28px_rgba(15,23,42,0.9)] transition-transform duration-200 hover:-translate-y-0.5"
+                Next Challenge
+              </div>
+              <div
+                className={cn(
+                  homeBodyFont.className,
+                  "flex-1 self-stretch text-center text-[20px] leading-[30px] font-semibold text-black"
+                )}
               >
-                Play again
-              </button>
+                {nextChallengeDate}
+              </div>
             </div>
 
-            <p className="text-center text-xs font-medium text-slate-400">
-              Press `r` to reset and replay
-            </p>
+            <button
+              type="button"
+              onClick={() => setScreen("home")}
+              className="inline-flex h-[44px] w-full items-center justify-center gap-[8px] self-stretch rounded-[12px] border-2 border-black bg-black px-[73px] py-[14px]"
+            >
+              <House
+                className="h-[24px] w-[24px] text-white"
+                strokeWidth={2.4}
+              />
+              <span
+                className={cn(
+                  homeBodyFont.className,
+                  "text-center text-[16px] leading-[24px] font-bold text-white"
+                )}
+              >
+                Back to Home
+              </span>
+            </button>
           </div>
         </div>
       </main>
@@ -872,6 +981,30 @@ function HomeMascot() {
         <div className="absolute bottom-[22px] left-[10px] h-[14px] w-[58px] rounded-[4px] bg-[#ffb899]" />
         <div className="absolute bottom-[10px] left-[19px] h-[12px] w-[50px] rounded-[4px] bg-[#fff4eb]" />
       </div>
+    </div>
+  )
+}
+
+function SummaryCelebrationIcon() {
+  return (
+    <div className="relative h-[72px] w-[72px] overflow-hidden">
+      <div className="absolute top-[2px] left-[2px] h-[68px] w-[68px] rounded-full bg-white" />
+      <div className="absolute top-[22px] left-[16px] h-[22px] w-[12px] rounded-full bg-[#FFC005]" />
+      <div className="absolute top-[22px] right-[16px] h-[22px] w-[12px] rounded-full bg-[#FFC005]" />
+      <div className="absolute top-[18px] left-[24px] h-[29px] w-[24px] rounded-[12px] bg-[#FFDF05]" />
+      <div className="absolute top-[18px] left-[23px] h-[3px] w-[26px] rounded-full bg-[#FF8805]" />
+      <div className="absolute top-[26px] left-[30px] h-[11px] w-[12px] rounded-full bg-[#F44040]" />
+      <div className="absolute top-[43px] left-[28px] h-[10px] w-[16px] rounded-full bg-[#FFC005]" />
+      <div className="absolute top-[52px] left-[25px] h-[6px] w-[22px] rounded-full bg-[#461B1B]" />
+    </div>
+  )
+}
+
+function FlameBadge() {
+  return (
+    <div className="relative h-[24px] w-[24px] overflow-hidden">
+      <div className="absolute top-[1px] left-[3px] h-[22px] w-[18px] rounded-[50%_50%_60%_60%] bg-[radial-gradient(ellipse_75%_96%_at_48%_100%,#FF9800_31%,#FF6D00_66%,#F44336_97%)]" />
+      <div className="absolute top-[9px] left-[8px] h-[14px] w-[9px] rounded-[50%_50%_60%_60%] bg-[radial-gradient(ellipse_94%_116%_at_53%_10%,#FFF176_21%,#FFF7AD_67%,rgba(255,241,118,0)_94%)]" />
     </div>
   )
 }
@@ -1268,6 +1401,97 @@ function clampIndex(index: number, length: number) {
   }
 
   return Math.max(0, Math.min(index, length - 1))
+}
+
+function readCompletionHistory(
+  puzzles: typeof crosswordLevels
+): Record<string, boolean> {
+  if (typeof window === "undefined") {
+    return {}
+  }
+
+  return Object.fromEntries(
+    puzzles.map((puzzle) => {
+      try {
+        const raw = window.localStorage.getItem(getPuzzleStorageKey(puzzle.id))
+        if (!raw) {
+          return [puzzle.date, false]
+        }
+
+        const parsed = JSON.parse(raw) as Partial<GameState>
+        return [
+          puzzle.date,
+          (parsed.solvedIds?.length ?? 0) >= puzzle.clues.length,
+        ]
+      } catch {
+        return [puzzle.date, false]
+      }
+    })
+  )
+}
+
+function buildWeeklyStreakDays(
+  dateKey: string,
+  completionHistory: Record<string, boolean>,
+  isTodayComplete: boolean
+): StreakDay[] {
+  const labels = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+  const currentDate = new Date(`${dateKey}T00:00:00`)
+  const day = currentDate.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const monday = new Date(currentDate)
+  monday.setDate(currentDate.getDate() + mondayOffset)
+
+  return labels.map((label, index) => {
+    const current = new Date(monday)
+    current.setDate(monday.getDate() + index)
+    const currentKey = getLocalDateKey(current)
+    const isToday = currentKey === dateKey
+
+    if (isToday) {
+      return {
+        label,
+        state: isTodayComplete ? "complete" : "pending",
+        isToday: true,
+      }
+    }
+
+    if (currentKey > dateKey) {
+      return { label, state: "pending", isToday: false }
+    }
+
+    return {
+      label,
+      state: completionHistory[currentKey] ? "complete" : "missed",
+      isToday: false,
+    }
+  })
+}
+
+function getNextChallengeDateKey(
+  dateKey: string,
+  puzzles: typeof crosswordLevels
+) {
+  const nextScheduled = [...puzzles]
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .find((puzzle) => puzzle.date > dateKey)
+
+  if (nextScheduled) {
+    return nextScheduled.date
+  }
+
+  const current = new Date(`${dateKey}T00:00:00`)
+  current.setDate(current.getDate() + 1)
+  return getLocalDateKey(current)
+}
+
+function formatNextChallengeDate(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00`)
+  const day = String(date.getDate()).padStart(2, "0")
+  const month = new Intl.DateTimeFormat("en-US", { month: "long" }).format(date)
+  const year = date.getFullYear()
+
+  return `${day} ${month} ${year}`
 }
 
 function getSolvedClueIds(
