@@ -477,6 +477,12 @@ export default function Page() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault()
+        setScreen("summary")
+        return
+      }
+
       if (event.key === "Backspace") {
         event.preventDefault()
         handleBackspace()
