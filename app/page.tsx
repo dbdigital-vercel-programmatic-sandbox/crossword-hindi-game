@@ -637,7 +637,7 @@ export default function Page() {
         "inline-flex h-svh w-full items-center justify-start gap-[10px] overflow-hidden bg-[#F6F0D7]"
       )}
     >
-      <div className="inline-flex h-full flex-1 flex-col items-center justify-start gap-[15px] px-[12px] py-[12px]">
+      <div className="mx-auto inline-flex h-full w-full max-w-[430px] flex-1 flex-col items-center justify-start gap-[15px] px-[12px] py-[12px]">
         <div className="inline-flex w-full items-center justify-start gap-[8px] self-stretch">
           <button
             type="button"
