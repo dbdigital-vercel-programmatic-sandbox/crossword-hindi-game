@@ -663,7 +663,7 @@ export default function Page() {
           </div>
         </div>
 
-        <section className="flex w-full flex-col items-center justify-start self-stretch">
+        <section className="flex min-h-0 w-full flex-1 flex-col items-center justify-center self-stretch">
           <div className="grid w-full grid-cols-8 gap-[3.92px]">
             {Array.from({ length: GRID_ROWS * GRID_COLS }, (_, index) => {
               const row = Math.floor(index / GRID_COLS)
