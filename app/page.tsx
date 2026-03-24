@@ -1,8 +1,8 @@
 "use client"
 
-import { Inter, Roboto } from "next/font/google"
+import { Inter, Noto_Sans, Roboto } from "next/font/google"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronLeft, ChevronRight, Delete } from "lucide-react"
+import { ChevronLeft, ChevronRight, Clock3, Delete } from "lucide-react"
 
 import { crosswordLevels } from "@/data/crossword-levels"
 import {
@@ -13,10 +13,14 @@ import {
 } from "@/lib/crossword-schedule"
 import { cn } from "@/lib/utils"
 
-const homeTitleFont = Inter({ subsets: ["latin"], weight: ["800"] })
+const homeTitleFont = Inter({ subsets: ["latin"], weight: ["600", "800"] })
 const homeBodyFont = Roboto({
   subsets: ["latin"],
   weight: ["400", "500", "700"],
+})
+const gameFont = Noto_Sans({
+  subsets: ["latin"],
+  weight: ["400", "600", "700"],
 })
 
 type LockSource = "given" | "revealed" | "solved"
@@ -627,198 +631,203 @@ export default function Page() {
   }
 
   return (
-    <main className="flex h-svh w-full flex-col overflow-hidden px-[clamp(12px,3vw,22px)] py-[clamp(10px,2vh,20px)]">
-      <div className="relative flex h-full min-h-0 flex-col">
-        <div className="pointer-events-none absolute inset-x-4 top-0 h-28 rounded-full bg-[#e8def8]/55 blur-3xl" />
-
-        <div className="relative flex items-center justify-between">
+    <main
+      className={cn(
+        gameFont.className,
+        "inline-flex h-svh w-full items-center justify-start gap-[10px] overflow-hidden bg-[#F6F0D7]"
+      )}
+    >
+      <div className="inline-flex h-full flex-1 flex-col items-center justify-start gap-[15px] px-[12px] py-[12px]">
+        <div className="inline-flex w-full items-center justify-start gap-[8px] self-stretch">
           <button
             type="button"
             onClick={() => setScreen("home")}
             aria-label="Back to home"
-            className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/80 bg-white/88 text-slate-600 shadow-[0_14px_32px_-24px_rgba(69,53,110,0.8)] transition-transform duration-200 hover:-translate-y-0.5"
+            className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[12px] bg-black p-[8px] text-white"
           >
-            <ChevronLeft className="h-5 w-5" />
+            <ChevronLeft className="h-[24px] w-[24px]" strokeWidth={2.4} />
           </button>
 
-          <div className="text-center">
-            <p className="text-[10px] font-semibold tracking-[0.28em] text-slate-400 uppercase sm:text-[11px]">
-              Daily crossword
-            </p>
-            <h1 className="text-[clamp(1.45rem,5vw,2rem)] font-semibold tracking-[0.08em] text-slate-800">
-              {displayDate}
-            </h1>
+          <div className="flex flex-1 flex-col justify-center text-center text-[18px] leading-[26px] font-semibold text-black">
+            {displayDate}
           </div>
 
-          <div className="rounded-2xl border border-white/80 bg-white/86 px-3 py-2 text-right shadow-[0_14px_32px_-24px_rgba(69,53,110,0.7)]">
-            <p className="text-[9px] font-semibold tracking-[0.2em] text-slate-400 uppercase">
-              Time
-            </p>
-            <p className="mt-0.5 text-sm font-semibold text-slate-700">
-              {timerLabel}
-            </p>
+          <div className="flex items-center justify-center gap-[4px] rounded-[32px] bg-black px-[8px] py-[2px]">
+            <Clock3
+              className="h-[20px] w-[20px] text-white"
+              strokeWidth={2.2}
+            />
+            <div className="text-center text-[16px] leading-[24px] font-semibold text-white">
+              {timerLabel.replace(/^0/, "")}
+            </div>
           </div>
         </div>
 
-        <section className="relative mt-[clamp(10px,1.8vh,18px)] flex min-h-0 flex-1 items-center justify-center">
-          <div className="w-full rounded-[28px] border border-white/70 bg-[#f6f1fb]/85 p-[clamp(8px,1.5vw,12px)] shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
-            <div className="grid grid-cols-8 gap-[clamp(4px,1vw,6px)]">
-              {Array.from({ length: GRID_ROWS * GRID_COLS }, (_, index) => {
-                const row = Math.floor(index / GRID_COLS)
-                const col = index % GRID_COLS
-                const key = keyFor(row, col)
-                const cell = cellData[key]
+        <section className="flex w-full flex-col items-start justify-start self-stretch">
+          <div className="grid w-full grid-cols-8 gap-[3.92px]">
+            {Array.from({ length: GRID_ROWS * GRID_COLS }, (_, index) => {
+              const row = Math.floor(index / GRID_COLS)
+              const col = index % GRID_COLS
+              const key = keyFor(row, col)
+              const cell = cellData[key]
 
-                if (!cell) {
-                  return (
-                    <div
-                      key={key}
-                      className="aspect-square rounded-[14px] bg-[#d9cdec]/22"
-                    />
-                  )
-                }
-
-                const entry = game.entries[key]
-                const isActive = activeClue.cells.some(
-                  (clueCell) => clueCell.key === key
-                )
-                const isCursor = activeClue.cells[game.activeIndex]?.key === key
-                const lockSource = game.lockSources[key]
-                const completedCell = cell.clueIds.some((clueId) =>
-                  solvedSet.has(clueId)
-                )
-                const feedbackMatch =
-                  game.feedback && cell.clueIds.includes(game.feedback.clueId)
-                    ? game.feedback
-                    : null
-
+              if (!cell) {
                 return (
-                  <button
-                    key={`${key}-${feedbackMatch?.stamp ?? 0}`}
-                    type="button"
-                    onClick={() => {
-                      const memberships = cell.clueIds
-                      if (memberships.length === 0) {
-                        return
-                      }
+                  <div
+                    key={key}
+                    className="aspect-square rounded-[3.92px] bg-[#C5D89D]"
+                  />
+                )
+              }
 
-                      const nextClueId =
-                        memberships.includes(game.activeClueId) &&
-                        memberships.length > 1
-                          ? (memberships.find(
-                              (clueId) => clueId !== game.activeClueId
-                            ) ?? memberships[0])
-                          : (memberships.find(
-                              (clueId) =>
-                                clueById[clueId].direction === "across"
-                            ) ?? memberships[0])
+              const entry = game.entries[key]
+              const isActive = activeClue.cells.some(
+                (clueCell) => clueCell.key === key
+              )
+              const isCursor = activeClue.cells[game.activeIndex]?.key === key
+              const lockSource = game.lockSources[key]
+              const completedCell = cell.clueIds.some((clueId) =>
+                solvedSet.has(clueId)
+              )
+              const feedbackMatch =
+                game.feedback && cell.clueIds.includes(game.feedback.clueId)
+                  ? game.feedback
+                  : null
 
-                      const clue = clueById[nextClueId]
-                      const preferredIndex = clue.cells.findIndex(
-                        (clueCell) => clueCell.key === key
-                      )
-                      selectClue(nextClueId, preferredIndex)
-                    }}
+              return (
+                <button
+                  key={`${key}-${feedbackMatch?.stamp ?? 0}`}
+                  type="button"
+                  onClick={() => {
+                    const memberships = cell.clueIds
+                    if (memberships.length === 0) {
+                      return
+                    }
+
+                    const nextClueId =
+                      memberships.includes(game.activeClueId) &&
+                      memberships.length > 1
+                        ? (memberships.find(
+                            (clueId) => clueId !== game.activeClueId
+                          ) ?? memberships[0])
+                        : (memberships.find(
+                            (clueId) => clueById[clueId].direction === "across"
+                          ) ?? memberships[0])
+
+                    const clue = clueById[nextClueId]
+                    const preferredIndex = clue.cells.findIndex(
+                      (clueCell) => clueCell.key === key
+                    )
+                    selectClue(nextClueId, preferredIndex)
+                  }}
+                  className={cn(
+                    "relative flex aspect-square items-center justify-center rounded-[3.92px] p-[7.85px] transition-all duration-200",
+                    feedbackMatch?.type === "wrong"
+                      ? "animate-clue-shake bg-[#f5b5b5]"
+                      : completedCell
+                        ? "bg-[#D9FFE6]"
+                        : isActive
+                          ? "bg-[#FFC191]"
+                          : "bg-white",
+                    isCursor && "ring-[1.57px] ring-[#FF9C55] ring-inset",
+                    feedbackMatch?.type === "correct" && "animate-clue-pop"
+                  )}
+                >
+                  {cell.number ? (
+                    <span className="absolute top-0 left-[2.14px] text-[6.28px] font-semibold text-[#006BAE]">
+                      {cell.number}
+                    </span>
+                  ) : null}
+
+                  <span
                     className={cn(
-                      "relative aspect-square rounded-[14px] border text-lg font-semibold text-slate-700 shadow-[0_18px_35px_-28px_rgba(61,45,93,0.75)] transition-all duration-200",
-                      "flex items-center justify-center",
-                      feedbackMatch?.type === "wrong"
-                        ? "animate-clue-shake border-[#da9290] bg-[#f7cdcb] shadow-[0_22px_42px_-30px_rgba(208,111,111,0.9)]"
-                        : completedCell
-                          ? "border-[#b9dcc7] bg-[#ebf8ef] shadow-[0_22px_42px_-30px_rgba(110,183,131,0.75)]"
-                          : isActive
-                            ? "border-[#f0c29d] bg-[#fde5d2] shadow-[0_22px_42px_-30px_rgba(238,155,108,0.9)]"
-                            : "border-white/90 bg-[#fffaf1]",
-                      isCursor &&
-                        "scale-[1.02] border-[#ebaa73] ring-2 ring-[#f6d5bc]",
-                      feedbackMatch?.type === "correct" &&
-                        "animate-clue-pop shadow-[0_24px_40px_-28px_rgba(110,183,131,0.9)]"
+                      "text-center text-[12.56px] leading-none font-semibold",
+                      lockSource === "given"
+                        ? "text-[#006BAE]"
+                        : completedCell ||
+                            lockSource === "solved" ||
+                            lockSource === "revealed"
+                          ? "text-[#166631]"
+                          : "text-black",
+                      !entry && "text-transparent"
                     )}
                   >
-                    {cell.number ? (
-                      <span className="absolute top-1 left-1 text-[9px] font-semibold text-slate-400 sm:top-1.5 sm:left-1.5 sm:text-[10px]">
-                        {cell.number}
-                      </span>
-                    ) : null}
-
-                    <span
-                      className={cn(
-                        "translate-y-[1px] text-[clamp(1rem,4.3vw,1.3rem)] leading-none tracking-[0.06em] transition-colors duration-200",
-                        completedCell && "text-emerald-700",
-                        lockSource === "revealed" && "text-teal-600",
-                        lockSource === "given" && "text-sky-700",
-                        lockSource === "solved" && "text-emerald-700",
-                        !lockSource && entry && "text-slate-700",
-                        feedbackMatch?.type === "wrong" && "text-rose-700",
-                        !entry && "text-transparent"
-                      )}
-                    >
-                      {entry ?? "_"}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+                    {entry ?? "_"}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </section>
 
-        <section className="mt-[clamp(8px,1.5vh,14px)] flex items-center gap-3 rounded-[22px] border border-white/70 bg-white/82 px-3 py-2.5 shadow-[0_24px_55px_-38px_rgba(77,55,118,0.55)]">
+        <section
+          className={cn(
+            homeTitleFont.className,
+            "inline-flex w-full items-center justify-between self-stretch overflow-hidden rounded-[3px] bg-[#89986D] px-[5px] py-[8px]"
+          )}
+        >
           <button
             type="button"
             onClick={() => cycleClue(-1)}
             aria-label="Previous clue"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#e8ddf6] bg-[#f8f4fd] text-slate-500 transition-colors hover:bg-white"
+            className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
           >
-            <ChevronLeft className="h-5 w-5" />
+            <ChevronLeft
+              className="absolute top-[6px] left-[8px] h-[12px] w-[6.85px]"
+              strokeWidth={3}
+            />
           </button>
 
-          <div key={activeClue.id} className="animate-clue-fade min-w-0 flex-1">
-            <p className="text-[11px] font-semibold tracking-[0.28em] text-slate-400 uppercase">
-              Current clue
-            </p>
-            <p className="mt-1 truncate text-base font-medium text-slate-700">
+          <div
+            key={activeClue.id}
+            className="animate-clue-fade flex flex-1 flex-col items-start justify-start gap-[5px] px-[8px]"
+          >
+            <div className="text-[11px] font-semibold tracking-[2.2px] text-[#C5D89D] uppercase">
+              Current Clue
+            </div>
+            <div className="text-[16px] font-semibold text-[#F6F0D7]">
               {activeClue.number}
               {activeClue.direction === "across" ? "a" : "d"}. {activeClue.clue}
-            </p>
-            <p className="mt-1 text-xs font-medium text-slate-400">
-              {activeProgress}/{activeClue.answer.length} correct
-            </p>
+            </div>
           </div>
 
           <button
             type="button"
             onClick={() => cycleClue(1)}
             aria-label="Next clue"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#e8ddf6] bg-[#f8f4fd] text-slate-500 transition-colors hover:bg-white"
+            className="relative h-[24px] w-[24px] overflow-hidden rounded-[20px] bg-[#C5D89D] text-black"
           >
-            <ChevronRight className="h-5 w-5" />
+            <ChevronRight
+              className="absolute top-[6px] left-[9px] h-[12px] w-[6.85px]"
+              strokeWidth={3}
+            />
           </button>
         </section>
 
-        <section className="mt-[clamp(8px,1.5vh,14px)] space-y-2 rounded-[24px] border border-white/70 bg-[#fbf8ff]/82 p-2.5 shadow-[0_22px_55px_-40px_rgba(77,55,118,0.55)]">
-          <div className="grid grid-cols-10 gap-2">
+        <section className="mt-auto flex w-full flex-col items-center justify-center gap-[8.89px] self-stretch rounded-[10px] bg-[rgba(91,76,12,0.10)] p-[10px]">
+          <div className="grid w-full grid-cols-10 gap-[4.65px]">
             {keyboardRows[0].map((key) => (
               <KeyButton key={key} value={key} onPress={handleLetter} />
             ))}
           </div>
 
-          <div className="grid grid-cols-9 gap-2 px-4">
+          <div className="mx-[30px] grid w-[calc(100%-60px)] grid-cols-9 gap-[4.65px] self-stretch">
             {keyboardRows[1].map((key) => (
               <KeyButton key={key} value={key} onPress={handleLetter} />
             ))}
           </div>
 
-          <div className="grid grid-cols-[repeat(7,minmax(0,1fr))_1.35fr] gap-2">
+          <div className="mx-[43px] grid w-[calc(100%-86px)] grid-cols-[repeat(7,minmax(0,1fr))_1.5fr] gap-[4.65px] self-stretch">
             {keyboardRows[2].map((key) => (
               <KeyButton key={key} value={key} onPress={handleLetter} />
             ))}
             <button
               type="button"
               onClick={handleBackspace}
-              className="flex h-[clamp(2.6rem,5.6vh,3rem)] items-center justify-center rounded-[18px] border border-[#eadff7] bg-white/90 text-slate-500 shadow-[0_18px_34px_-28px_rgba(66,50,104,0.8)] transition-transform duration-150 hover:-translate-y-0.5"
+              className="inline-flex h-[33.96px] w-full items-center justify-center rounded-[4.85px] bg-[#D9E2F8] text-[#1B1B1D]"
               aria-label="Backspace"
             >
-              <Delete className="h-5 w-5" />
+              <Delete className="h-[19.4px] w-[19.4px]" />
             </button>
           </div>
         </section>
@@ -838,9 +847,12 @@ function KeyButton({
     <button
       type="button"
       onClick={() => onPress(value)}
-      className="flex h-[clamp(2.6rem,5.6vh,3rem)] items-center justify-center rounded-[18px] border border-[#eadff7] bg-white/92 text-[clamp(0.95rem,3.4vw,1rem)] font-semibold tracking-[0.08em] text-slate-700 shadow-[0_18px_34px_-28px_rgba(66,50,104,0.8)] transition-transform duration-150 hover:-translate-y-0.5"
+      className={cn(
+        homeBodyFont.className,
+        "inline-flex h-[33.96px] w-full min-w-0 items-center justify-center rounded-[4.85px] bg-white text-[17.79px] font-normal text-[#1B1B1D] lowercase"
+      )}
     >
-      {value}
+      {value.toLowerCase()}
     </button>
   )
 }
