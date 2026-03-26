@@ -484,7 +484,7 @@ export default function Page() {
     }, 360)
 
     return () => window.clearTimeout(timeout)
-  }, [game.feedback])
+  }, [clueById, game.feedback])
 
   useEffect(() => {
     if (screen !== "game" || isPuzzleComplete) {

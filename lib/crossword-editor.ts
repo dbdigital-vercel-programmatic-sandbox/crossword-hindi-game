@@ -26,6 +26,24 @@ export type DerivedWord = ClueDefinition & {
   complete: boolean
 }
 
+export type SeedWord = {
+  answer: string
+  clue?: string
+}
+
+export type GridRecommendation = {
+  rows: number
+  cols: number
+  label: string
+}
+
+export type GeneratedDraftResult = {
+  draft: CrosswordDraft
+  placedWords: SeedWord[]
+  unplacedWords: SeedWord[]
+  recommendation: GridRecommendation
+}
+
 export type ValidationCheck = {
   label: string
   passed: boolean
@@ -240,6 +258,116 @@ export function createPuzzleId(title: string, date: string) {
   return `${base || "crossword"}-${date}`
 }
 
+export function recommendGridSize(words: SeedWord[]): GridRecommendation {
+  const normalizedWords = normalizeSeedWords(words)
+  const totalLetters = normalizedWords.reduce(
+    (sum, word) => sum + word.answer.length,
+    0
+  )
+  const longestWord = Math.max(
+    ...normalizedWords.map((word) => word.answer.length),
+    0
+  )
+  const estimatedSide = Math.ceil(Math.sqrt(Math.max(totalLetters * 1.9, 16)))
+  const baseSide = Math.max(longestWord + 2, estimatedSide, 7)
+  const side = clampGridSize(baseSide % 2 === 0 ? baseSide + 1 : baseSide)
+
+  return {
+    rows: side,
+    cols: side,
+    label:
+      normalizedWords.length === 0
+        ? "Add a few words and I will recommend a grid size."
+        : `Try ${side}x${side}. It fits the longest word (${longestWord}) and gives ${normalizedWords.length} answers enough crossing room.`,
+  }
+}
+
+export function generateDraftFromWordList({
+  words,
+  rows,
+  cols,
+  title = "",
+  date = getLocalDateKey(),
+}: {
+  words: SeedWord[]
+  rows: number
+  cols: number
+  title?: string
+  date?: string
+}): GeneratedDraftResult {
+  const normalizedWords = normalizeSeedWords(words)
+  const recommendation = recommendGridSize(normalizedWords)
+  const draft = createBlockedDraft(rows, cols, title, date)
+
+  if (normalizedWords.length === 0) {
+    return {
+      draft,
+      placedWords: [],
+      unplacedWords: [],
+      recommendation,
+    }
+  }
+
+  const board = createPlacementBoard(rows, cols)
+  const sortedWords = [...normalizedWords].sort(
+    (left, right) => right.answer.length - left.answer.length
+  )
+  const placements: Array<Placement & { word: SeedWord }> = []
+  const unplacedWords: SeedWord[] = []
+
+  const firstWord = sortedWords[0]
+  const firstPlacement = createFirstPlacement(firstWord, rows, cols)
+
+  if (!firstPlacement) {
+    return {
+      draft,
+      placedWords: [],
+      unplacedWords: normalizedWords,
+      recommendation,
+    }
+  }
+
+  applyPlacement(board, firstPlacement, firstWord)
+  placements.push({ ...firstPlacement, word: firstWord })
+
+  sortedWords.slice(1).forEach((word) => {
+    const candidate = findBestPlacement(board, word, rows, cols)
+
+    if (!candidate) {
+      unplacedWords.push(word)
+      return
+    }
+
+    applyPlacement(board, candidate, word)
+    placements.push({ ...candidate, word })
+  })
+
+  fillDraftFromBoard(draft, board)
+
+  const clueBuckets = new Map<string, SeedWord[]>()
+  placements.forEach(({ word }) => {
+    const existing = clueBuckets.get(word.answer) ?? []
+    existing.push(word)
+    clueBuckets.set(word.answer, existing)
+  })
+
+  const derivedWords = deriveWordsFromDraft(draft)
+  draft.clues = Object.fromEntries(
+    derivedWords.map((word) => {
+      const bucket = clueBuckets.get(word.answer) ?? []
+      const matchedSeed = bucket.shift()
+      return [word.id, matchedSeed?.clue?.trim() ?? ""]
+    })
+  )
+
+  return {
+    draft,
+    placedWords: placements.map(({ word }) => word),
+    unplacedWords,
+    recommendation,
+  }
+}
+
 function buildWordFromDraft(
   draft: CrosswordDraft,
   row: number,
@@ -370,4 +498,273 @@ function cellIsOpen(draft: CrosswordDraft, row: number, col: number) {
 
 function normalizeClue(clue: string) {
   return clue.trim()
+}
+
+type PlacementBoardCell = {
+  letter: string
+  across: boolean
+  down: boolean
+}
+
+type Placement = {
+  row: number
+  col: number
+  direction: Direction
+  intersections: number
+}
+
+function normalizeSeedWords(words: SeedWord[]) {
+  return words
+    .map((word) => ({
+      answer: word.answer
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z]/g, ""),
+      clue: word.clue?.trim() ?? "",
+    }))
+    .filter((word) => word.answer.length >= 2)
+}
+
+function clampGridSize(value: number) {
+  return Math.max(7, Math.min(17, value))
+}
+
+function createBlockedDraft(
+  rows: number,
+  cols: number,
+  title: string,
+  date: string
+) {
+  const draft = createEmptyDraft(rows, cols)
+  draft.title = title
+  draft.date = date
+  draft.cells = Array.from({ length: rows }, () =>
+    Array.from({ length: cols }, () => ({
+      letter: "",
+      isBlock: true,
+      given: false,
+    }))
+  )
+  draft.clues = {}
+  return draft
+}
+
+function createPlacementBoard(rows: number, cols: number) {
+  return Array.from({ length: rows }, () =>
+    Array.from({ length: cols }, () => ({
+      letter: "",
+      across: false,
+      down: false,
+    }))
+  )
+}
+
+function createFirstPlacement(word: SeedWord, rows: number, cols: number) {
+  if (word.answer.length <= cols) {
+    return {
+      row: Math.floor(rows / 2),
+      col: Math.floor((cols - word.answer.length) / 2),
+      direction: "across" as const,
+      intersections: 0,
+    }
+  }
+
+  if (word.answer.length <= rows) {
+    return {
+      row: Math.floor((rows - word.answer.length) / 2),
+      col: Math.floor(cols / 2),
+      direction: "down" as const,
+      intersections: 0,
+    }
+  }
+
+  return null
+}
+
+function fillDraftFromBoard(
+  draft: CrosswordDraft,
+  board: PlacementBoardCell[][]
+) {
+  draft.cells = board.map((row) =>
+    row.map((cell) => ({
+      letter: cell.letter,
+      isBlock: !cell.letter,
+      given: false,
+    }))
+  )
+}
+
+function findBestPlacement(
+  board: PlacementBoardCell[][],
+  word: SeedWord,
+  rows: number,
+  cols: number
+) {
+  const candidates: Placement[] = []
+  const seen = new Set<string>()
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const cell = board[row][col]
+      if (!cell.letter) {
+        continue
+      }
+
+      word.answer.split("").forEach((letter, index) => {
+        if (letter !== cell.letter) {
+          return
+        }
+
+        const directions: Direction[] = []
+        if (cell.across && !cell.down) {
+          directions.push("down")
+        }
+        if (cell.down && !cell.across) {
+          directions.push("across")
+        }
+        if (cell.across && cell.down) {
+          directions.push("across", "down")
+        }
+
+        directions.forEach((direction) => {
+          const placement = {
+            row: direction === "down" ? row - index : row,
+            col: direction === "across" ? col - index : col,
+            direction,
+          }
+          const key = `${placement.row}:${placement.col}:${placement.direction}`
+          if (seen.has(key)) {
+            return
+          }
+
+          seen.add(key)
+          const intersections = countPlacementIntersections(
+            board,
+            placement.row,
+            placement.col,
+            direction,
+            word.answer,
+            rows,
+            cols
+          )
+
+          if (intersections === -1) {
+            return
+          }
+
+          candidates.push({ ...placement, intersections })
+        })
+      })
+    }
+  }
+
+  return (
+    candidates.sort(
+      (left, right) =>
+        scorePlacement(right, rows, cols) - scorePlacement(left, rows, cols)
+    )[0] ?? null
+  )
+}
+
+function countPlacementIntersections(
+  board: PlacementBoardCell[][],
+  startRow: number,
+  startCol: number,
+  direction: Direction,
+  answer: string,
+  rows: number,
+  cols: number
+) {
+  const lastRow = startRow + (direction === "down" ? answer.length - 1 : 0)
+  const lastCol = startCol + (direction === "across" ? answer.length - 1 : 0)
+
+  if (
+    startRow < 0 ||
+    startCol < 0 ||
+    lastRow >= rows ||
+    lastCol >= cols ||
+    hasLetter(
+      board,
+      startRow - (direction === "down" ? 1 : 0),
+      startCol - (direction === "across" ? 1 : 0)
+    ) ||
+    hasLetter(
+      board,
+      lastRow + (direction === "down" ? 1 : 0),
+      lastCol + (direction === "across" ? 1 : 0)
+    )
+  ) {
+    return -1
+  }
+
+  let intersections = 0
+
+  for (let index = 0; index < answer.length; index += 1) {
+    const row = startRow + (direction === "down" ? index : 0)
+    const col = startCol + (direction === "across" ? index : 0)
+    const cell = board[row][col]
+    const letter = answer[index]
+
+    if (cell.letter && cell.letter !== letter) {
+      return -1
+    }
+
+    if (
+      (direction === "across" && cell.across) ||
+      (direction === "down" && cell.down)
+    ) {
+      return -1
+    }
+
+    if (cell.letter) {
+      intersections += 1
+      continue
+    }
+
+    if (
+      direction === "across" &&
+      (hasLetter(board, row - 1, col) || hasLetter(board, row + 1, col))
+    ) {
+      return -1
+    }
+
+    if (
+      direction === "down" &&
+      (hasLetter(board, row, col - 1) || hasLetter(board, row, col + 1))
+    ) {
+      return -1
+    }
+  }
+
+  return intersections > 0 ? intersections : -1
+}
+
+function applyPlacement(
+  board: PlacementBoardCell[][],
+  placement: Placement,
+  word: SeedWord
+) {
+  word.answer.split("").forEach((letter, index) => {
+    const row = placement.row + (placement.direction === "down" ? index : 0)
+    const col = placement.col + (placement.direction === "across" ? index : 0)
+    const cell = board[row][col]
+    cell.letter = letter
+    if (placement.direction === "across") {
+      cell.across = true
+    } else {
+      cell.down = true
+    }
+  })
+}
+
+function hasLetter(board: PlacementBoardCell[][], row: number, col: number) {
+  return Boolean(board[row]?.[col]?.letter)
+}
+
+function scorePlacement(placement: Placement, rows: number, cols: number) {
+  const centerRow = Math.floor(rows / 2)
+  const centerCol = Math.floor(cols / 2)
+  const distance =
+    Math.abs(placement.row - centerRow) + Math.abs(placement.col - centerCol)
+  return placement.intersections * 100 - distance
 }

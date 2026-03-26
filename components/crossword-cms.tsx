@@ -25,9 +25,12 @@ import { CrosswordPreview } from "@/components/crossword-preview"
 import {
   createDraftFromPuzzle,
   createEmptyDraft,
+  generateDraftFromWordList,
   getSymmetryPartner,
   keyFor,
+  recommendGridSize,
   type CrosswordDraft,
+  type SeedWord,
   validateCrosswordDraft,
 } from "@/lib/crossword-editor"
 import type { CrosswordPuzzle } from "@/lib/crossword-schedule"
@@ -49,6 +52,8 @@ export function CrosswordCms({
 }) {
   const [puzzles, setPuzzles] = useState(initialPuzzles)
   const [draft, setDraft] = useState<CrosswordDraft>(() => createEmptyDraft())
+  const [gridSize, setGridSize] = useState({ rows: 9, cols: 8 })
+  const [wordSeedInput, setWordSeedInput] = useState("")
   const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 })
   const [mode, setMode] = useState<EditorMode>("letters")
   const [isSaving, setIsSaving] = useState(false)
@@ -58,8 +63,20 @@ export function CrosswordCms({
       ? "Draft changes stay live in the preview."
       : "Add DATABASE_URL to enable saving in Neon.",
   })
+  const [plannerState, setPlannerState] = useState<SaveState>({
+    tone: "idle",
+    message: "Paste answer words to generate a starter layout.",
+  })
 
   const validation = useMemo(() => validateCrosswordDraft(draft), [draft])
+  const seedWords = useMemo(
+    () => parseSeedWords(wordSeedInput),
+    [wordSeedInput]
+  )
+  const recommendedGrid = useMemo(
+    () => recommendGridSize(seedWords),
+    [seedWords]
+  )
   const acrossWords = useMemo(
     () => validation.words.filter((word) => word.direction === "across"),
     [validation.words]
@@ -163,7 +180,7 @@ export function CrosswordCms({
           left.date.localeCompare(right.date)
         )
       })
-      setDraft(createDraftFromPuzzle(data.puzzle))
+      replaceDraft(createDraftFromPuzzle(data.puzzle))
       setSaveState({
         tone: "success",
         message: `Saved and scheduled for ${data.puzzle.date}.`,
@@ -181,8 +198,57 @@ export function CrosswordCms({
     }
   }
 
+  function replaceDraft(nextDraft: CrosswordDraft) {
+    setDraft(nextDraft)
+    setGridSize({ rows: nextDraft.rows, cols: nextDraft.cols })
+    setSelectedCell(findFirstEditableCell(nextDraft))
+  }
+
   function updateMetadata(field: "title" | "date", value: string) {
     setDraft((current) => ({ ...current, [field]: value }))
+  }
+
+  function applyGridSize(nextRows: number, nextCols: number) {
+    const rows = clamp(nextRows, 7, 17)
+    const cols = clamp(nextCols, 7, 17)
+    const nextDraft = createEmptyDraft(rows, cols)
+    nextDraft.title = draft.title
+    nextDraft.date = draft.date
+    replaceDraft(nextDraft)
+    setWordSeedInput("")
+    setPlannerState({
+      tone: "idle",
+      message: `Started a fresh ${rows}x${cols} grid.`,
+    })
+  }
+
+  function generateFromWords() {
+    if (seedWords.length === 0) {
+      setPlannerState({
+        tone: "error",
+        message: "Add one word per line before generating a layout.",
+      })
+      return
+    }
+
+    const result = generateDraftFromWordList({
+      words: seedWords,
+      rows: gridSize.rows,
+      cols: gridSize.cols,
+      title: draft.title,
+      date: draft.date,
+    })
+
+    replaceDraft(result.draft)
+    setPlannerState({
+      tone: result.unplacedWords.length > 0 ? "error" : "success",
+      message:
+        result.unplacedWords.length > 0
+          ? `Placed ${result.placedWords.length}/${seedWords.length} words. Not fitted: ${result.unplacedWords
+              .map((word) => word.answer)
+              .join(", ")}.`
+          : `Placed all ${result.placedWords.length} words into the ${result.draft.rows}x${result.draft.cols} draft.`,
+    })
   }
 
   function updateLetter(row: number, col: number, value: string) {
@@ -262,15 +328,19 @@ export function CrosswordCms({
 
   function loadPuzzle(puzzle: CrosswordPuzzle) {
     const nextDraft = createDraftFromPuzzle(puzzle)
-    setDraft(nextDraft)
-    setSelectedCell(findFirstEditableCell(nextDraft))
+    replaceDraft(nextDraft)
+    setWordSeedInput(
+      puzzle.clues.map((clue) => `${clue.answer} | ${clue.clue}`).join("\n")
+    )
     setSaveState({ tone: "idle", message: `Loaded ${puzzle.title}.` })
   }
 
   function resetDraft() {
-    const nextDraft = createEmptyDraft(draft.rows, draft.cols)
-    setDraft(nextDraft)
-    setSelectedCell({ row: 0, col: 0 })
+    const nextDraft = createEmptyDraft(gridSize.rows, gridSize.cols)
+    nextDraft.title = draft.title
+    nextDraft.date = draft.date
+    replaceDraft(nextDraft)
+    setWordSeedInput("")
     setSaveState({ tone: "idle", message: "Started a new puzzle draft." })
   }
 
@@ -326,6 +396,130 @@ export function CrosswordCms({
 
           <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
             <section className="space-y-6">
+              <Panel title="Word planner" icon={Sparkles}>
+                <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)]">
+                  <div className="space-y-3">
+                    <label className="grid gap-2 text-sm text-[#495647]">
+                      <span className="font-semibold text-[#243629]">
+                        Answers to place
+                      </span>
+                      <textarea
+                        rows={10}
+                        value={wordSeedInput}
+                        onChange={(event) =>
+                          setWordSeedInput(event.target.value)
+                        }
+                        placeholder={
+                          "APPLE | Orchard favorite\nPEAR\nMELON | Summer picnic fruit"
+                        }
+                        className="resize-none rounded-[24px] border border-[#284130]/12 bg-[#f8f4e6] px-4 py-4 text-sm text-[#203124] transition outline-none placeholder:text-[#9aa18f] focus:border-[#d47538]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#6b7666]">
+                      Use one line per answer. Add an optional hint after a
+                      pipe, like <code>ANSWER | clue</code>.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-[24px] border border-[#284130]/10 bg-[#f8f4e6] p-4">
+                      <div className="text-xs font-semibold tracking-[0.24em] text-[#728060] uppercase">
+                        Recommended grid
+                      </div>
+                      <div className="mt-3 text-2xl font-semibold text-[#243629]">
+                        {recommendedGrid.rows} x {recommendedGrid.cols}
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-[#5b6858]">
+                        {recommendedGrid.label}
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="grid gap-2 text-sm text-[#495647]">
+                        <span className="font-semibold text-[#243629]">
+                          Rows
+                        </span>
+                        <input
+                          type="number"
+                          min={7}
+                          max={17}
+                          value={gridSize.rows}
+                          onChange={(event) =>
+                            setGridSize((current) => ({
+                              ...current,
+                              rows: Number(event.target.value) || 7,
+                            }))
+                          }
+                          className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-[#203124] transition outline-none focus:border-[#d47538]"
+                        />
+                      </label>
+                      <label className="grid gap-2 text-sm text-[#495647]">
+                        <span className="font-semibold text-[#243629]">
+                          Cols
+                        </span>
+                        <input
+                          type="number"
+                          min={7}
+                          max={17}
+                          value={gridSize.cols}
+                          onChange={(event) =>
+                            setGridSize((current) => ({
+                              ...current,
+                              cols: Number(event.target.value) || 7,
+                            }))
+                          }
+                          className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-[#203124] transition outline-none focus:border-[#d47538]"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setGridSize({
+                            rows: recommendedGrid.rows,
+                            cols: recommendedGrid.cols,
+                          })
+                        }
+                        className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm font-semibold text-[#243629] transition hover:bg-[#f6f0dd]"
+                      >
+                        Use recommended size
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          applyGridSize(gridSize.rows, gridSize.cols)
+                        }
+                        className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm font-semibold text-[#243629] transition hover:bg-[#f6f0dd]"
+                      >
+                        Apply fresh grid size
+                      </button>
+                      <button
+                        type="button"
+                        onClick={generateFromWords}
+                        className="rounded-2xl bg-[#d47538] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#bf642a]"
+                      >
+                        Generate from word list
+                      </button>
+                    </div>
+
+                    <div
+                      className={cn(
+                        "rounded-[22px] border px-4 py-3 text-sm leading-6",
+                        plannerState.tone === "error"
+                          ? "border-[#e0b49b]/40 bg-[#fff1e8] text-[#7d4a29]"
+                          : plannerState.tone === "success"
+                            ? "border-[#7eb06d]/30 bg-[#eff8e8] text-[#2d5e2e]"
+                            : "border-[#284130]/10 bg-white text-[#51604f]"
+                      )}
+                    >
+                      {plannerState.message}
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                 <Panel title="Puzzle details" icon={CalendarDays}>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -708,4 +902,18 @@ function findFirstEditableCell(draft: CrosswordDraft) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+function parseSeedWords(value: string): SeedWord[] {
+  return value
+    .split(/\n|,/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [answer, ...clueParts] = line.split("|")
+      return {
+        answer: answer.trim(),
+        clue: clueParts.join("|").trim(),
+      }
+    })
 }
