@@ -7,6 +7,8 @@ import { ChevronLeft, ChevronRight, Clock3, Delete, House } from "lucide-react"
 import { crosswordLevels } from "@/data/crossword-levels"
 import {
   type ClueDefinition,
+  type CrosswordPuzzle,
+  type CrosswordPuzzleSummary,
   getLocalDateKey,
   getScheduledPuzzle,
   msUntilNextLocalMidnight,
@@ -82,10 +84,16 @@ const keyboardRows = [
 
 export default function Page() {
   const [dateKey, setDateKey] = useState(() => getLocalDateKey())
-
-  const scheduledPuzzle = useMemo(
-    () => getScheduledPuzzle(crosswordLevels, dateKey),
-    [dateKey]
+  const [scheduledPuzzle, setScheduledPuzzle] = useState<CrosswordPuzzle>(() =>
+    getScheduledPuzzle(crosswordLevels, dateKey)
+  )
+  const [schedule, setSchedule] = useState<CrosswordPuzzleSummary[]>(() =>
+    crosswordLevels.map((puzzle) => ({
+      id: puzzle.id,
+      date: puzzle.date,
+      title: puzzle.title,
+      clueCount: puzzle.clues.length,
+    }))
   )
   const puzzleModel = useMemo(
     () => buildPuzzleModel(scheduledPuzzle),
@@ -106,6 +114,53 @@ export default function Page() {
   )
 
   useEffect(() => {
+    let isCancelled = false
+
+    const loadPuzzle = async () => {
+      try {
+        const response = await fetch(`/api/puzzles?date=${dateKey}`, {
+          cache: "no-store",
+        })
+        if (!response.ok) {
+          return
+        }
+
+        const data = (await response.json()) as {
+          puzzle: CrosswordPuzzle
+          schedule: CrosswordPuzzleSummary[]
+        }
+
+        if (isCancelled) {
+          return
+        }
+
+        setScheduledPuzzle(data.puzzle)
+        setSchedule(data.schedule)
+      } catch {
+        if (isCancelled) {
+          return
+        }
+
+        setScheduledPuzzle(getScheduledPuzzle(crosswordLevels, dateKey))
+        setSchedule(
+          crosswordLevels.map((puzzle) => ({
+            id: puzzle.id,
+            date: puzzle.date,
+            title: puzzle.title,
+            clueCount: puzzle.clues.length,
+          }))
+        )
+      }
+    }
+
+    void loadPuzzle()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [dateKey])
+
+  useEffect(() => {
     const restoredGame = loadStoredGame(storageKey, puzzleModel)
     setGame(restoredGame ?? puzzleModel.initialGame)
     setLoadedStorageKey(storageKey)
@@ -117,12 +172,12 @@ export default function Page() {
     }
 
     window.localStorage.setItem(storageKey, serializeGame(game))
-    setCompletionHistory(readCompletionHistory(crosswordLevels))
-  }, [game, loadedStorageKey, storageKey])
+    setCompletionHistory(readCompletionHistory(schedule))
+  }, [game, loadedStorageKey, schedule, storageKey])
 
   useEffect(() => {
-    setCompletionHistory(readCompletionHistory(crosswordLevels))
-  }, [])
+    setCompletionHistory(readCompletionHistory(schedule))
+  }, [schedule])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -134,10 +189,6 @@ export default function Page() {
 
   const activeClue = clueById[game.activeClueId]
   const solvedSet = useMemo(() => new Set(game.solvedIds), [game.solvedIds])
-  const completedSet = useMemo(
-    () => new Set(game.completedIds),
-    [game.completedIds]
-  )
   const displayDate = useMemo(() => formatPuzzleDate(dateKey), [dateKey])
   const displayLongDate = useMemo(
     () => formatPuzzleDateLong(dateKey),
@@ -157,11 +208,8 @@ export default function Page() {
     [completionHistory, dateKey, isPuzzleComplete]
   )
   const nextChallengeDate = useMemo(
-    () =>
-      formatNextChallengeDate(
-        getNextChallengeDateKey(dateKey, crosswordLevels)
-      ),
-    [dateKey]
+    () => formatNextChallengeDate(getNextChallengeDateKey(dateKey, schedule)),
+    [dateKey, schedule]
   )
 
   const resetCurrentPuzzle = useCallback(() => {
@@ -169,30 +217,33 @@ export default function Page() {
     setScreen("game")
   }, [puzzleModel.initialGame])
 
-  const selectClue = useCallback((clueId: string, preferredIndex?: number) => {
-    setGame((current) => {
-      if (current.feedback?.type === "wrong") {
-        return current
-      }
+  const selectClue = useCallback(
+    (clueId: string, preferredIndex?: number) => {
+      setGame((current) => {
+        if (current.feedback?.type === "wrong") {
+          return current
+        }
 
-      const nextClue = clueById[clueId]
-      const nextIndex =
-        preferredIndex !== undefined &&
-        isEditableCell(nextClue, preferredIndex, current.lockSources)
-          ? preferredIndex
-          : firstEmptyIndex(nextClue, current.entries, current.lockSources)
+        const nextClue = clueById[clueId]
+        const nextIndex =
+          preferredIndex !== undefined &&
+          isEditableCell(nextClue, preferredIndex, current.lockSources)
+            ? preferredIndex
+            : firstEmptyIndex(nextClue, current.entries, current.lockSources)
 
-      return {
-        ...current,
-        activeClueId: clueId,
-        activeIndex: nextIndex,
-        feedback:
-          current.feedback?.clueId === current.activeClueId
-            ? null
-            : current.feedback,
-      }
-    })
-  }, [])
+        return {
+          ...current,
+          activeClueId: clueId,
+          activeIndex: nextIndex,
+          feedback:
+            current.feedback?.clueId === current.activeClueId
+              ? null
+              : current.feedback,
+        }
+      })
+    },
+    [clueById]
+  )
 
   const cycleClue = useCallback(
     (step: 1 | -1) => {
@@ -201,129 +252,132 @@ export default function Page() {
         (currentIndex + step + clueOrder.length) % clueOrder.length
       selectClue(clueOrder[nextIndex])
     },
-    [game.activeClueId, selectClue]
+    [clueOrder, game.activeClueId, selectClue]
   )
 
-  const handleLetter = useCallback((letter: string) => {
-    setGame((current) => {
-      const clue = clueById[current.activeClueId]
-      if (
-        current.solvedIds.includes(clue.id) ||
-        current.feedback?.type === "wrong"
-      ) {
-        return current
-      }
+  const handleLetter = useCallback(
+    (letter: string) => {
+      setGame((current) => {
+        const clue = clueById[current.activeClueId]
+        if (
+          current.solvedIds.includes(clue.id) ||
+          current.feedback?.type === "wrong"
+        ) {
+          return current
+        }
 
-      const targetIndex = findWritableIndex(
-        clue,
-        current.activeIndex,
-        current.entries,
-        current.lockSources
-      )
-      if (targetIndex === -1) {
-        return current
-      }
-
-      const targetCell = clue.cells[targetIndex]
-      const targetKey = targetCell.key
-      const nextEntries = {
-        ...current.entries,
-        [targetKey]: letter,
-      }
-
-      let nextState: GameState = {
-        ...current,
-        entries: nextEntries,
-        solvedIds: getSolvedClueIds(clues, cellData, nextEntries),
-        feedback: null,
-        activeIndex: nextCursorIndex(
+        const targetIndex = findWritableIndex(
           clue,
-          targetIndex,
+          current.activeIndex,
+          current.entries,
+          current.lockSources
+        )
+        if (targetIndex === -1) {
+          return current
+        }
+
+        const targetCell = clue.cells[targetIndex]
+        const targetKey = targetCell.key
+        const nextEntries = {
+          ...current.entries,
+          [targetKey]: letter,
+        }
+
+        let nextState: GameState = {
+          ...current,
+          entries: nextEntries,
+          solvedIds: getSolvedClueIds(clues, cellData, nextEntries),
+          feedback: null,
+          activeIndex: nextCursorIndex(
+            clue,
+            targetIndex,
+            nextEntries,
+            current.lockSources
+          ),
+        }
+
+        if (!isClueFilled(clue, nextEntries)) {
+          return nextState
+        }
+
+        if (isClueSolved(clue, cellData, nextEntries)) {
+          const nextCompletedIds = current.completedIds.includes(clue.id)
+            ? current.completedIds
+            : [...current.completedIds, clue.id]
+          const frozenLocks = freezeSolvedClue(current.lockSources, clue)
+          const revealOutcome = revealLetters(
+            clues,
+            cellData,
+            nextEntries,
+            frozenLocks,
+            nextState.solvedIds
+          )
+          const nextSolvedIds = getSolvedClueIds(
+            clues,
+            cellData,
+            revealOutcome.entries
+          )
+          const nextClueId = findNextUnsolvedClueId(
+            clueOrder,
+            clue.id,
+            nextSolvedIds
+          )
+
+          const nextFeedback: FeedbackState = {
+            clueId: clue.id,
+            type: "correct",
+            stamp: Date.now(),
+          }
+
+          nextState = {
+            ...nextState,
+            entries: revealOutcome.entries,
+            lockSources: revealOutcome.lockSources,
+            solvedIds: nextSolvedIds,
+            completedIds: nextCompletedIds,
+            feedback: nextFeedback,
+          }
+
+          if (nextClueId) {
+            nextState = {
+              ...nextState,
+              activeClueId: nextClueId,
+              activeIndex: firstEmptyIndex(
+                clueById[nextClueId],
+                revealOutcome.entries,
+                revealOutcome.lockSources
+              ),
+            }
+          }
+
+          return nextState
+        }
+
+        const incorrectIndex = firstIncorrectEditableIndex(
+          clue,
+          cellData,
           nextEntries,
           current.lockSources
-        ),
-      }
-
-      if (!isClueFilled(clue, nextEntries)) {
-        return nextState
-      }
-
-      if (isClueSolved(clue, cellData, nextEntries)) {
-        const nextCompletedIds = current.completedIds.includes(clue.id)
-          ? current.completedIds
-          : [...current.completedIds, clue.id]
-        const frozenLocks = freezeSolvedClue(current.lockSources, clue)
-        const revealOutcome = revealLetters(
-          clues,
-          cellData,
-          nextEntries,
-          frozenLocks,
-          nextState.solvedIds
-        )
-        const nextSolvedIds = getSolvedClueIds(
-          clues,
-          cellData,
-          revealOutcome.entries
-        )
-        const nextClueId = findNextUnsolvedClueId(
-          clueOrder,
-          clue.id,
-          nextSolvedIds
         )
 
         const nextFeedback: FeedbackState = {
           clueId: clue.id,
-          type: "correct",
+          type: "wrong",
           stamp: Date.now(),
         }
 
-        nextState = {
+        return {
           ...nextState,
-          entries: revealOutcome.entries,
-          lockSources: revealOutcome.lockSources,
-          solvedIds: nextSolvedIds,
-          completedIds: nextCompletedIds,
           feedback: nextFeedback,
+          activeIndex:
+            incorrectIndex === -1
+              ? firstEmptyIndex(clue, nextEntries, current.lockSources)
+              : incorrectIndex,
         }
-
-        if (nextClueId) {
-          nextState = {
-            ...nextState,
-            activeClueId: nextClueId,
-            activeIndex: firstEmptyIndex(
-              clueById[nextClueId],
-              revealOutcome.entries,
-              revealOutcome.lockSources
-            ),
-          }
-        }
-
-        return nextState
-      }
-
-      const incorrectIndex = firstIncorrectEditableIndex(
-        clue,
-        cellData,
-        nextEntries,
-        current.lockSources
-      )
-
-      const nextFeedback: FeedbackState = {
-        clueId: clue.id,
-        type: "wrong",
-        stamp: Date.now(),
-      }
-
-      return {
-        ...nextState,
-        feedback: nextFeedback,
-        activeIndex:
-          incorrectIndex === -1
-            ? firstEmptyIndex(clue, nextEntries, current.lockSources)
-            : incorrectIndex,
-      }
-    })
-  }, [])
+      })
+    },
+    [cellData, clueById, clueOrder, clues]
+  )
 
   const handleBackspace = useCallback(() => {
     setGame((current) => {
@@ -376,7 +430,7 @@ export default function Page() {
         feedback: null,
       }
     })
-  }, [])
+  }, [cellData, clueById, clues])
 
   useEffect(() => {
     if (game.feedback?.type !== "correct") {
@@ -392,7 +446,7 @@ export default function Page() {
     }, 520)
 
     return () => window.clearTimeout(timeout)
-  }, [game.feedback])
+  }, [clueById, game.feedback])
 
   useEffect(() => {
     if (game.feedback?.type !== "wrong") {
@@ -510,10 +564,6 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [cycleClue, handleBackspace, handleLetter, screen])
-
-  const activeProgress = activeClue.cells.filter(
-    (cell) => game.entries[cell.key] === cellData[cell.key].solution
-  ).length
 
   if (screen === "home") {
     return (
@@ -1410,7 +1460,7 @@ function clampIndex(index: number, length: number) {
 }
 
 function readCompletionHistory(
-  puzzles: typeof crosswordLevels
+  puzzles: CrosswordPuzzleSummary[]
 ): Record<string, boolean> {
   if (typeof window === "undefined") {
     return {}
@@ -1427,7 +1477,7 @@ function readCompletionHistory(
         const parsed = JSON.parse(raw) as Partial<GameState>
         return [
           puzzle.date,
-          (parsed.solvedIds?.length ?? 0) >= puzzle.clues.length,
+          (parsed.solvedIds?.length ?? 0) >= puzzle.clueCount,
         ]
       } catch {
         return [puzzle.date, false]
@@ -1476,7 +1526,7 @@ function buildWeeklyStreakDays(
 
 function getNextChallengeDateKey(
   dateKey: string,
-  puzzles: typeof crosswordLevels
+  puzzles: CrosswordPuzzleSummary[]
 ) {
   const nextScheduled = [...puzzles]
     .sort((left, right) => left.date.localeCompare(right.date))

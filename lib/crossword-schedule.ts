@@ -20,6 +20,13 @@ export type CrosswordPuzzle = {
   givenCells: string[]
 }
 
+export type CrosswordPuzzleSummary = {
+  id: string
+  date: string
+  title: string
+  clueCount: number
+}
+
 export function getLocalDateKey(date = new Date()) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, "0")
