@@ -345,7 +345,7 @@ export function CrosswordCms({
   }
 
   return (
-    <main className="min-h-svh overflow-y-auto bg-[linear-gradient(180deg,#f8f3e4_0%,#efe6ca_46%,#e7ddbf_100%)] text-[#203124]">
+    <main className="h-svh overflow-y-auto bg-[linear-gradient(180deg,#f8f3e4_0%,#efe6ca_46%,#e7ddbf_100%)] text-[#203124]">
       <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 lg:px-8">
         <div className="rounded-[36px] border border-[#284130]/10 bg-[rgba(255,250,240,0.82)] p-5 shadow-[0_36px_120px_rgba(33,49,37,0.12)] backdrop-blur">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
