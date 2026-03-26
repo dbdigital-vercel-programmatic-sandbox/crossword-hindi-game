@@ -31,6 +31,11 @@ export type SeedWord = {
   clue?: string
 }
 
+export const FIXED_GRID_SIZES = [7, 9, 11] as const
+
+const MIN_WORD_LENGTH = 3
+const MIN_FILL_RATE = 0.7
+
 export type GridRecommendation = {
   rows: number
   cols: number
@@ -48,19 +53,35 @@ export type ValidationCheck = {
   label: string
   passed: boolean
   detail: string
+  severity: "error" | "warning"
+}
+
+export type DraftValidationStats = {
+  totalCells: number
+  openCells: number
+  blockedCells: number
+  fillRate: number
+  blockRate: number
+  wordCount: number
+  acrossCount: number
+  downCount: number
+  maxWordLength: number
+  duplicateCount: number
 }
 
 export type DraftValidationResult = {
   words: DerivedWord[]
   checks: ValidationCheck[]
   errors: string[]
+  warnings: string[]
+  stats: DraftValidationStats
 }
 
 export function keyFor(row: number, col: number) {
   return `${row}-${col}`
 }
 
-export function createEmptyDraft(rows = 9, cols = 8): CrosswordDraft {
+export function createEmptyDraft(rows = 9, cols = 9): CrosswordDraft {
   return {
     title: "",
     date: getLocalDateKey(),
@@ -158,24 +179,73 @@ export function validateCrosswordDraft(
   draft: CrosswordDraft
 ): DraftValidationResult {
   const words = deriveWordsFromDraft(draft)
+  const totalCells = draft.rows * draft.cols
   const openCells = countOpenCells(draft)
+  const blockedCells = totalCells - openCells
+  const fillRate = totalCells === 0 ? 0 : openCells / totalCells
+  const blockRate = totalCells === 0 ? 0 : blockedCells / totalCells
   const hasRotationalSymmetry = gridHasRotationalSymmetry(draft)
+  const usesFixedGridSize = gridUsesFixedSquareSize(draft)
   const everyOpenCellHasLetter = allOpenCellsHaveLetters(draft)
   const everyOpenCellCrosses = allOpenCellsCross(draft)
+  const gridIsConnected = openCellsFormSingleRegion(draft)
   const everyWordHasHint = words.every((word) =>
     Boolean(normalizeClue(word.clue))
   )
+  const cluesAvoidAnswer = words.every((word) => clueAvoidsAnswer(word))
   const hasWords = words.length > 0
   const hasTitle = Boolean(draft.title.trim())
   const hasValidDate = /^\d{4}-\d{2}-\d{2}$/.test(draft.date)
+  const maxWordLength = getMaxWordLengthForGrid(
+    Math.max(draft.rows, draft.cols)
+  )
+  const validWordLengths = words.every(
+    (word) => word.length >= MIN_WORD_LENGTH && word.length <= maxWordLength
+  )
+  const acrossCount = words.filter((word) => word.direction === "across").length
+  const downCount = words.filter((word) => word.direction === "down").length
+  const mixesDirections = acrossCount > 0 && downCount > 0
+  const duplicateAnswers = countDuplicateAnswers(words)
+  const hasNoDuplicateAnswers = duplicateAnswers === 0
+
+  const stats: DraftValidationStats = {
+    totalCells,
+    openCells,
+    blockedCells,
+    fillRate,
+    blockRate,
+    wordCount: words.length,
+    acrossCount,
+    downCount,
+    maxWordLength,
+    duplicateCount: duplicateAnswers,
+  }
 
   const checks: ValidationCheck[] = [
     {
-      label: "Grid symmetry",
-      passed: hasRotationalSymmetry,
-      detail: hasRotationalSymmetry
-        ? "Blocks keep 180-degree rotational symmetry."
-        : "Black squares need to mirror across the center of the grid.",
+      label: "Fixed grid",
+      passed: usesFixedGridSize,
+      detail: usesFixedGridSize
+        ? `Using the approved ${draft.rows}x${draft.cols} square format.`
+        : "Use a fixed square grid: 7x7, 9x9, or 11x11.",
+      severity: "error",
+    },
+    {
+      label: "Fill rate",
+      passed: fillRate >= MIN_FILL_RATE,
+      detail:
+        fillRate >= MIN_FILL_RATE
+          ? `Open cells fill ${formatPercent(fillRate)} of the board and keep blocks controlled.`
+          : `Reach at least 70% fill. The current board is ${formatPercent(fillRate)} open and ${formatPercent(blockRate)} blocked.`,
+      severity: "error",
+    },
+    {
+      label: "Connected layout",
+      passed: gridIsConnected,
+      detail: gridIsConnected
+        ? "All open cells belong to one connected crossword web."
+        : "Join every section into one connected grid with no isolated clusters.",
+      severity: "error",
     },
     {
       label: "Crossed letters",
@@ -183,6 +253,7 @@ export function validateCrosswordDraft(
       detail: everyOpenCellCrosses
         ? "Every open square belongs to both an across and down answer."
         : "Every letter square must sit inside both an across and down word.",
+      severity: "error",
     },
     {
       label: "Filled answers",
@@ -190,6 +261,31 @@ export function validateCrosswordDraft(
       detail: everyOpenCellHasLetter
         ? "Every open square has a letter."
         : "Add letters to every open square before saving.",
+      severity: "error",
+    },
+    {
+      label: "Word lengths",
+      passed: validWordLengths,
+      detail: validWordLengths
+        ? `Each entry stays between ${MIN_WORD_LENGTH} and ${maxWordLength} letters for this grid.`
+        : `Keep every answer between ${MIN_WORD_LENGTH} and ${maxWordLength} letters for this grid size.`,
+      severity: "error",
+    },
+    {
+      label: "No duplicate answers",
+      passed: hasNoDuplicateAnswers,
+      detail: hasNoDuplicateAnswers
+        ? "Every across and down answer is unique."
+        : "Remove duplicate answer words before saving.",
+      severity: "error",
+    },
+    {
+      label: "Across + down mix",
+      passed: mixesDirections,
+      detail: mixesDirections
+        ? "The puzzle uses both horizontal and vertical entries."
+        : "Add both across and down answers so the puzzle interlocks properly.",
+      severity: "error",
     },
     {
       label: "Hints ready",
@@ -197,10 +293,28 @@ export function validateCrosswordDraft(
       detail: everyWordHasHint
         ? "Each across and down entry has a clue."
         : "Add a hint for every across and down word.",
+      severity: "error",
+    },
+    {
+      label: "Clue giveaways",
+      passed: cluesAvoidAnswer,
+      detail: cluesAvoidAnswer
+        ? "Clues do not directly repeat the answer text."
+        : "At least one clue repeats its answer. Rewrite it to feel less obvious.",
+      severity: "warning",
+    },
+    {
+      label: "Symmetry bonus",
+      passed: hasRotationalSymmetry,
+      detail: hasRotationalSymmetry
+        ? "Blocks keep 180-degree rotational symmetry."
+        : "Symmetry is optional, but mirrored blocks usually make the board feel more polished.",
+      severity: "warning",
     },
   ]
 
   const errors: string[] = []
+  const warnings: string[] = []
 
   if (!hasTitle) {
     errors.push("Add a puzzle title.")
@@ -215,12 +329,18 @@ export function validateCrosswordDraft(
   }
 
   checks
-    .filter((check) => !check.passed)
+    .filter((check) => !check.passed && check.severity === "error")
     .forEach((check) => {
       errors.push(check.detail)
     })
 
-  return { words, checks, errors }
+  checks
+    .filter((check) => !check.passed && check.severity === "warning")
+    .forEach((check) => {
+      warnings.push(check.detail)
+    })
+
+  return { words, checks, errors, warnings, stats }
 }
 
 export function buildPuzzleFromDraft(draft: CrosswordDraft): CrosswordPuzzle {
@@ -270,7 +390,7 @@ export function recommendGridSize(words: SeedWord[]): GridRecommendation {
   )
   const estimatedSide = Math.ceil(Math.sqrt(Math.max(totalLetters * 1.9, 16)))
   const baseSide = Math.max(longestWord + 2, estimatedSide, 7)
-  const side = clampGridSize(baseSide % 2 === 0 ? baseSide + 1 : baseSide)
+  const side = pickFixedGridSize(baseSide % 2 === 0 ? baseSide + 1 : baseSide)
 
   return {
     rows: side,
@@ -298,22 +418,29 @@ export function generateDraftFromWordList({
   const normalizedWords = normalizeSeedWords(words)
   const recommendation = recommendGridSize(normalizedWords)
   const draft = createBlockedDraft(rows, cols, title, date)
+  const maxWordLength = getMaxWordLengthForGrid(Math.max(rows, cols))
+  const eligibleWords = normalizedWords.filter(
+    (word) => word.answer.length <= maxWordLength
+  )
+  const oversizedWords = normalizedWords.filter(
+    (word) => word.answer.length > maxWordLength
+  )
 
-  if (normalizedWords.length === 0) {
+  if (eligibleWords.length === 0) {
     return {
       draft,
       placedWords: [],
-      unplacedWords: [],
+      unplacedWords: oversizedWords,
       recommendation,
     }
   }
 
   const board = createPlacementBoard(rows, cols)
-  const sortedWords = [...normalizedWords].sort(
+  const sortedWords = [...eligibleWords].sort(
     (left, right) => right.answer.length - left.answer.length
   )
   const placements: Array<Placement & { word: SeedWord }> = []
-  const unplacedWords: SeedWord[] = []
+  const unplacedWords: SeedWord[] = [...oversizedWords]
 
   const firstWord = sortedWords[0]
   const firstPlacement = createFirstPlacement(firstWord, rows, cols)
@@ -522,11 +649,118 @@ function normalizeSeedWords(words: SeedWord[]) {
         .replace(/[^A-Z]/g, ""),
       clue: word.clue?.trim() ?? "",
     }))
-    .filter((word) => word.answer.length >= 2)
+    .filter((word) => word.answer.length >= MIN_WORD_LENGTH)
 }
 
 function clampGridSize(value: number) {
-  return Math.max(7, Math.min(17, value))
+  return Math.max(
+    FIXED_GRID_SIZES[0],
+    Math.min(FIXED_GRID_SIZES.at(-1) ?? 11, value)
+  )
+}
+
+function pickFixedGridSize(value: number) {
+  const target = clampGridSize(value)
+  return (
+    FIXED_GRID_SIZES.find((size) => size >= target) ??
+    FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
+  )
+}
+
+function gridUsesFixedSquareSize(draft: CrosswordDraft) {
+  return (
+    draft.rows === draft.cols &&
+    FIXED_GRID_SIZES.includes(draft.rows as 7 | 9 | 11)
+  )
+}
+
+function getMaxWordLengthForGrid(size: number) {
+  if (size <= 7) {
+    return 7
+  }
+
+  if (size <= 9) {
+    return 8
+  }
+
+  return 9
+}
+
+function countDuplicateAnswers(words: DerivedWord[]) {
+  const counts = new Map<string, number>()
+
+  words.forEach((word) => {
+    counts.set(word.answer, (counts.get(word.answer) ?? 0) + 1)
+  })
+
+  return Array.from(counts.values()).filter((count) => count > 1).length
+}
+
+function clueAvoidsAnswer(word: DerivedWord) {
+  const normalizedAnswer = word.answer.replace(/[^A-Z]/g, "")
+  const normalizedHint = normalizeClue(word.clue)
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+
+  if (!normalizedAnswer || !normalizedHint) {
+    return true
+  }
+
+  return !normalizedHint.includes(normalizedAnswer)
+}
+
+function openCellsFormSingleRegion(draft: CrosswordDraft) {
+  const start = findFirstOpenCell(draft)
+
+  if (!start) {
+    return false
+  }
+
+  const visited = new Set<string>()
+  const queue = [start]
+
+  while (queue.length > 0) {
+    const current = queue.shift()
+
+    if (!current) {
+      continue
+    }
+
+    const key = keyFor(current.row, current.col)
+    if (visited.has(key)) {
+      continue
+    }
+
+    visited.add(key)
+    ;[
+      [current.row - 1, current.col],
+      [current.row + 1, current.col],
+      [current.row, current.col - 1],
+      [current.row, current.col + 1],
+    ].forEach(([row, col]) => {
+      if (cellIsOpen(draft, row, col)) {
+        queue.push({ row, col })
+      }
+    })
+  }
+
+  return visited.size === countOpenCells(draft)
+}
+
+function findFirstOpenCell(draft: CrosswordDraft) {
+  for (let row = 0; row < draft.rows; row += 1) {
+    for (let col = 0; col < draft.cols; col += 1) {
+      if (!draft.cells[row][col].isBlock) {
+        return { row, col }
+      }
+    }
+  }
+
+  return null
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`
 }
 
 function createBlockedDraft(

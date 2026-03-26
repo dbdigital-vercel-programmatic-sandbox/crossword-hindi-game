@@ -8,13 +8,19 @@ import {
   useState,
 } from "react"
 import {
+  BrainCircuit,
   CalendarDays,
   CheckCircle2,
   CircleAlert,
   Database,
   Eye,
+  Gamepad2,
+  LayoutGrid,
+  Link2,
+  ListChecks,
   PenSquare,
   Plus,
+  Quote,
   Save,
   Sparkles,
   Square,
@@ -25,6 +31,7 @@ import { CrosswordPreview } from "@/components/crossword-preview"
 import {
   createDraftFromPuzzle,
   createEmptyDraft,
+  FIXED_GRID_SIZES,
   generateDraftFromWordList,
   getSymmetryPartner,
   keyFor,
@@ -43,6 +50,121 @@ type SaveState = {
   message: string
 }
 
+const GRID_OPTIONS = [
+  {
+    size: 7,
+    label: "Quick hit",
+    detail: "Fast warmups with short, high-crossing entries.",
+  },
+  {
+    size: 9,
+    label: "Daily driver",
+    detail: "Best default for balanced fill, clue variety, and retention.",
+  },
+  {
+    size: 11,
+    label: "Stretch",
+    detail: "More room for theme words without losing the web.",
+  },
+] as const
+
+const RULEBOOK = [
+  {
+    eyebrow: "Foundation",
+    title: "Structure first",
+    icon: LayoutGrid,
+    items: [
+      "Use a fixed 7x7, 9x9, or 11x11 square grid.",
+      "Keep at least 70% of cells open so the board stays lively.",
+      "Treat symmetry as a polish bonus, not the main goal.",
+    ],
+  },
+  {
+    eyebrow: "Interlock",
+    title: "No island words",
+    icon: Link2,
+    items: [
+      "Every answer must cross at least one other answer.",
+      "Mix across and down entries instead of running one-direction streaks.",
+      "The whole puzzle should read like one connected web.",
+    ],
+  },
+  {
+    eyebrow: "Word quality",
+    title: "Keep vocabulary clean",
+    icon: BrainCircuit,
+    items: [
+      "Stay in the 3-8 letter sweet spot unless the larger grid earns 9.",
+      "Favor common English words with flexible crossing letters.",
+      "Skip obscure abbreviations, junk fill, and random proper nouns.",
+    ],
+  },
+  {
+    eyebrow: "Clue voice",
+    title: "Write for humans",
+    icon: Quote,
+    items: [
+      "Use direct, riddle, relatable, or playful clue styles.",
+      "Do not repeat the answer inside the clue.",
+      "Avoid dry dictionary copy and vague multi-answer prompts.",
+    ],
+  },
+  {
+    eyebrow: "Validation",
+    title: "Check before publish",
+    icon: ListChecks,
+    items: [
+      "No duplicate answers, no disconnected sections, no empty dead zones.",
+      "Make sure every clue maps to exactly one answer.",
+      "The grid should stay fully solvable without guessy junk.",
+    ],
+  },
+  {
+    eyebrow: "Player feel",
+    title: "Front-load delight",
+    icon: Gamepad2,
+    items: [
+      "Let the first two or three solves feel easy and rewarding.",
+      "Show answer length and support progressive hints.",
+      "Balance difficulty so the puzzle ramps instead of spikes.",
+    ],
+  },
+] as const
+
+const DIFFICULTY_MIX = [
+  { label: "Easy", detail: "70% easy / 30% medium" },
+  { label: "Medium", detail: "40% easy / 40% medium / 20% hard" },
+  { label: "Hard", detail: "20% easy / 50% medium / 30% hard" },
+] as const
+
+const PROMPT_TEMPLATE = `Generate a crossword puzzle with the following constraints:
+
+Grid size: 9x9
+Minimum 70% fill rate
+All words must interlock (no isolated words)
+Each word must intersect with at least one other word
+Use common English words (3-8 letters)
+Avoid rare words, abbreviations, and proper nouns
+Maintain a single connected grid (no isolated sections)
+Use a mix of horizontal and vertical words
+
+Clues must be:
+
+Clear, engaging, and not direct dictionary definitions
+A mix of straightforward, riddle-style, and relatable hints
+
+Difficulty:
+
+50% easy, 30% medium, 20% hard
+
+Output format:
+
+Grid (with letters and blanks)
+Word list with positions
+Clues mapped to each word
+
+Validate the puzzle before output to ensure it is solvable and well-connected.`
+
 export function CrosswordCms({
   initialPuzzles,
   databaseConnected,
@@ -52,7 +174,7 @@ export function CrosswordCms({
 }) {
   const [puzzles, setPuzzles] = useState(initialPuzzles)
   const [draft, setDraft] = useState<CrosswordDraft>(() => createEmptyDraft())
-  const [gridSize, setGridSize] = useState({ rows: 9, cols: 8 })
+  const [gridSize, setGridSize] = useState(9)
   const [wordSeedInput, setWordSeedInput] = useState("")
   const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 })
   const [mode, setMode] = useState<EditorMode>("letters")
@@ -60,12 +182,13 @@ export function CrosswordCms({
   const [saveState, setSaveState] = useState<SaveState>({
     tone: "idle",
     message: databaseConnected
-      ? "Draft changes stay live in the preview."
+      ? "Structure first: keep the board dense, connected, and clue-ready."
       : "Add DATABASE_URL to enable saving in Neon.",
   })
   const [plannerState, setPlannerState] = useState<SaveState>({
     tone: "idle",
-    message: "Paste answer words to generate a starter layout.",
+    message:
+      "Start with strong seed words and let the generator build outward.",
   })
 
   const validation = useMemo(() => validateCrosswordDraft(draft), [draft])
@@ -200,7 +323,7 @@ export function CrosswordCms({
 
   function replaceDraft(nextDraft: CrosswordDraft) {
     setDraft(nextDraft)
-    setGridSize({ rows: nextDraft.rows, cols: nextDraft.cols })
+    setGridSize(nextDraft.rows)
     setSelectedCell(findFirstEditableCell(nextDraft))
   }
 
@@ -208,17 +331,16 @@ export function CrosswordCms({
     setDraft((current) => ({ ...current, [field]: value }))
   }
 
-  function applyGridSize(nextRows: number, nextCols: number) {
-    const rows = clamp(nextRows, 7, 17)
-    const cols = clamp(nextCols, 7, 17)
-    const nextDraft = createEmptyDraft(rows, cols)
+  function applyGridSize(nextSize: number) {
+    const size = clampToFixedGridSize(nextSize)
+    const nextDraft = createEmptyDraft(size, size)
     nextDraft.title = draft.title
     nextDraft.date = draft.date
     replaceDraft(nextDraft)
     setWordSeedInput("")
     setPlannerState({
       tone: "idle",
-      message: `Started a fresh ${rows}x${cols} grid.`,
+      message: `Started a fresh ${size}x${size} grid.`,
     })
   }
 
@@ -233,8 +355,8 @@ export function CrosswordCms({
 
     const result = generateDraftFromWordList({
       words: seedWords,
-      rows: gridSize.rows,
-      cols: gridSize.cols,
+      rows: gridSize,
+      cols: gridSize,
       title: draft.title,
       date: draft.date,
     })
@@ -244,7 +366,7 @@ export function CrosswordCms({
       tone: result.unplacedWords.length > 0 ? "error" : "success",
       message:
         result.unplacedWords.length > 0
-          ? `Placed ${result.placedWords.length}/${seedWords.length} words. Not fitted: ${result.unplacedWords
+          ? `Placed ${result.placedWords.length}/${seedWords.length} words. Review these leftovers: ${result.unplacedWords
               .map((word) => word.answer)
               .join(", ")}.`
           : `Placed all ${result.placedWords.length} words into the ${result.draft.rows}x${result.draft.cols} draft.`,
@@ -336,13 +458,45 @@ export function CrosswordCms({
   }
 
   function resetDraft() {
-    const nextDraft = createEmptyDraft(gridSize.rows, gridSize.cols)
+    const nextDraft = createEmptyDraft(gridSize, gridSize)
     nextDraft.title = draft.title
     nextDraft.date = draft.date
     replaceDraft(nextDraft)
     setWordSeedInput("")
     setSaveState({ tone: "idle", message: "Started a new puzzle draft." })
   }
+
+  const blockingChecks = validation.checks.filter(
+    (check) => check.severity === "error"
+  )
+  const advisoryChecks = validation.checks.filter(
+    (check) => check.severity === "warning"
+  )
+  const validationMetrics = [
+    {
+      label: "Fill",
+      value: formatPercent(validation.stats.fillRate),
+      detail: `${validation.stats.openCells}/${validation.stats.totalCells} cells open`,
+    },
+    {
+      label: "Blocks",
+      value: formatPercent(validation.stats.blockRate),
+      detail: `${validation.stats.blockedCells} blocked cells`,
+    },
+    {
+      label: "Entries",
+      value: `${validation.stats.wordCount}`,
+      detail: `${validation.stats.acrossCount} across / ${validation.stats.downCount} down`,
+    },
+    {
+      label: "Issues",
+      value: `${validation.errors.length}`,
+      detail:
+        validation.warnings.length > 0
+          ? `${validation.warnings.length} advisory notes`
+          : "No advisory notes",
+    },
+  ]
 
   return (
     <main className="h-svh overflow-y-auto bg-[linear-gradient(180deg,#f8f3e4_0%,#efe6ca_46%,#e7ddbf_100%)] text-[#203124]">
@@ -356,12 +510,12 @@ export function CrosswordCms({
               </div>
               <div>
                 <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">
-                  Schedule daily grids with live checks.
+                  Build denser, smarter crossword boards.
                 </h1>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-[#5d6857] sm:text-base">
-                  Build future puzzles, keep the board symmetric, make sure
-                  every letter crosses, and preview exactly what players will
-                  see.
+                  This editor now prioritizes fixed grids, strong interlocks,
+                  clean clue writing, and connected boards that feel satisfying
+                  from the first few solves.
                 </p>
               </div>
             </div>
@@ -394,119 +548,184 @@ export function CrosswordCms({
             {saveState.message}
           </div>
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {validationMetrics.map((metric) => (
+              <div
+                key={metric.label}
+                className="rounded-[22px] border border-[#284130]/10 bg-[#f7f1de] px-4 py-4"
+              >
+                <div className="text-[11px] font-semibold tracking-[0.22em] text-[#738166] uppercase">
+                  {metric.label}
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-[#243629]">
+                  {metric.value}
+                </div>
+                <p className="mt-1 text-sm text-[#5b6858]">{metric.detail}</p>
+              </div>
+            ))}
+          </div>
+
           <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
             <section className="space-y-6">
               <Panel title="Word planner" icon={Sparkles}>
-                <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)]">
-                  <div className="space-y-3">
-                    <label className="grid gap-2 text-sm text-[#495647]">
-                      <span className="font-semibold text-[#243629]">
-                        Answers to place
-                      </span>
-                      <textarea
-                        rows={10}
-                        value={wordSeedInput}
-                        onChange={(event) =>
-                          setWordSeedInput(event.target.value)
-                        }
-                        placeholder={
-                          "APPLE | Orchard favorite\nPEAR\nMELON | Summer picnic fruit"
-                        }
-                        className="resize-none rounded-[24px] border border-[#284130]/12 bg-[#f8f4e6] px-4 py-4 text-sm text-[#203124] transition outline-none placeholder:text-[#9aa18f] focus:border-[#d47538]"
-                      />
-                    </label>
-                    <p className="text-xs leading-5 text-[#6b7666]">
-                      Use one line per answer. Add an optional hint after a
-                      pipe, like <code>ANSWER | clue</code>.
-                    </p>
+                <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                  <div className="space-y-4">
+                    <div className="rounded-[28px] border border-[#284130]/10 bg-[linear-gradient(135deg,#fbf5e6_0%,#f4ecd4_100%)] p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold tracking-[0.24em] text-[#728060] uppercase">
+                            Seed answers
+                          </div>
+                          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#586554]">
+                            Start with common words that cross easily. Use one
+                            line per answer and add an optional clue with{" "}
+                            <code>ANSWER | clue</code>.
+                          </p>
+                        </div>
+                        <div className="rounded-full bg-white/80 px-4 py-2 text-xs font-semibold text-[#4d5c4c]">
+                          Longest word anchors first
+                        </div>
+                      </div>
+
+                      <label className="mt-4 grid gap-2 text-sm text-[#495647]">
+                        <textarea
+                          rows={11}
+                          value={wordSeedInput}
+                          onChange={(event) =>
+                            setWordSeedInput(event.target.value)
+                          }
+                          placeholder={
+                            "WATER | Flows but never walks\nMARKET | Weekend bargain stop\nLIGHT | Switch it on"
+                          }
+                          className="resize-none rounded-[24px] border border-[#284130]/12 bg-white/90 px-4 py-4 text-sm text-[#203124] transition outline-none placeholder:text-[#9aa18f] focus:border-[#d47538]"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {RULEBOOK.slice(0, 3).map((rule) => {
+                        const Icon = rule.icon
+
+                        return (
+                          <div
+                            key={rule.title}
+                            className="rounded-[24px] border border-[#284130]/10 bg-white p-4"
+                          >
+                            <div className="flex items-center gap-3 text-[#26402e]">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#eef3da]">
+                                <Icon className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <div className="text-[11px] font-semibold tracking-[0.22em] text-[#7a856e] uppercase">
+                                  {rule.eyebrow}
+                                </div>
+                                <div className="text-sm font-semibold text-[#243629]">
+                                  {rule.title}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-3 space-y-2 text-sm leading-6 text-[#586554]">
+                              {rule.items.map((item) => (
+                                <p key={item}>{item}</p>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
 
                   <div className="space-y-4">
-                    <div className="rounded-[24px] border border-[#284130]/10 bg-[#f8f4e6] p-4">
+                    <div className="rounded-[28px] border border-[#284130]/10 bg-[#f8f4e6] p-5">
                       <div className="text-xs font-semibold tracking-[0.24em] text-[#728060] uppercase">
-                        Recommended grid
+                        Fixed grid menu
                       </div>
-                      <div className="mt-3 text-2xl font-semibold text-[#243629]">
-                        {recommendedGrid.rows} x {recommendedGrid.cols}
+                      <div className="mt-3 grid gap-3">
+                        {GRID_OPTIONS.map((option) => (
+                          <button
+                            key={option.size}
+                            type="button"
+                            onClick={() => setGridSize(option.size)}
+                            className={cn(
+                              "rounded-[22px] border px-4 py-4 text-left transition",
+                              gridSize === option.size
+                                ? "border-[#26402e] bg-[#26402e] text-[#f6f1df]"
+                                : "border-[#284130]/12 bg-white text-[#243629] hover:bg-[#f6f0dd]"
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-base font-semibold">
+                                {option.size} x {option.size}
+                              </span>
+                              <span
+                                className={cn(
+                                  "rounded-full px-3 py-1 text-[11px] font-semibold tracking-[0.2em] uppercase",
+                                  gridSize === option.size
+                                    ? "bg-white/15 text-[#f8f3e4]"
+                                    : "bg-[#eef3da] text-[#43553f]"
+                                )}
+                              >
+                                {option.label}
+                              </span>
+                            </div>
+                            <p
+                              className={cn(
+                                "mt-2 text-sm leading-6",
+                                gridSize === option.size
+                                  ? "text-[#e8dfc7]"
+                                  : "text-[#5b6858]"
+                              )}
+                            >
+                              {option.detail}
+                            </p>
+                          </button>
+                        ))}
                       </div>
-                      <p className="mt-2 text-sm leading-6 text-[#5b6858]">
+                    </div>
+
+                    <div className="rounded-[28px] border border-[#284130]/10 bg-white p-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-xs font-semibold tracking-[0.24em] text-[#728060] uppercase">
+                            Recommended grid
+                          </div>
+                          <div className="mt-2 text-3xl font-semibold text-[#243629]">
+                            {recommendedGrid.rows} x {recommendedGrid.cols}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setGridSize(recommendedGrid.rows)}
+                          className="rounded-full border border-[#284130]/12 bg-[#f6f0dd] px-4 py-2 text-xs font-semibold text-[#243629] transition hover:bg-[#efe5c8]"
+                        >
+                          Use recommendation
+                        </button>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-[#5b6858]">
                         {recommendedGrid.label}
                       </p>
-                    </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="grid gap-2 text-sm text-[#495647]">
-                        <span className="font-semibold text-[#243629]">
-                          Rows
-                        </span>
-                        <input
-                          type="number"
-                          min={7}
-                          max={17}
-                          value={gridSize.rows}
-                          onChange={(event) =>
-                            setGridSize((current) => ({
-                              ...current,
-                              rows: Number(event.target.value) || 7,
-                            }))
-                          }
-                          className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-[#203124] transition outline-none focus:border-[#d47538]"
-                        />
-                      </label>
-                      <label className="grid gap-2 text-sm text-[#495647]">
-                        <span className="font-semibold text-[#243629]">
-                          Cols
-                        </span>
-                        <input
-                          type="number"
-                          min={7}
-                          max={17}
-                          value={gridSize.cols}
-                          onChange={(event) =>
-                            setGridSize((current) => ({
-                              ...current,
-                              cols: Number(event.target.value) || 7,
-                            }))
-                          }
-                          className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-[#203124] transition outline-none focus:border-[#d47538]"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="grid gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setGridSize({
-                            rows: recommendedGrid.rows,
-                            cols: recommendedGrid.cols,
-                          })
-                        }
-                        className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm font-semibold text-[#243629] transition hover:bg-[#f6f0dd]"
-                      >
-                        Use recommended size
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          applyGridSize(gridSize.rows, gridSize.cols)
-                        }
-                        className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm font-semibold text-[#243629] transition hover:bg-[#f6f0dd]"
-                      >
-                        Apply fresh grid size
-                      </button>
-                      <button
-                        type="button"
-                        onClick={generateFromWords}
-                        className="rounded-2xl bg-[#d47538] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#bf642a]"
-                      >
-                        Generate from word list
-                      </button>
+                      <div className="mt-4 grid gap-2">
+                        <button
+                          type="button"
+                          onClick={() => applyGridSize(gridSize)}
+                          className="rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm font-semibold text-[#243629] transition hover:bg-[#f6f0dd]"
+                        >
+                          Apply fresh {gridSize}x{gridSize} grid
+                        </button>
+                        <button
+                          type="button"
+                          onClick={generateFromWords}
+                          className="rounded-2xl bg-[#d47538] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#bf642a]"
+                        >
+                          Generate interlocked layout
+                        </button>
+                      </div>
                     </div>
 
                     <div
                       className={cn(
-                        "rounded-[22px] border px-4 py-3 text-sm leading-6",
+                        "rounded-[24px] border px-4 py-4 text-sm leading-6",
                         plannerState.tone === "error"
                           ? "border-[#e0b49b]/40 bg-[#fff1e8] text-[#7d4a29]"
                           : plannerState.tone === "success"
@@ -696,7 +915,7 @@ export function CrosswordCms({
 
               <Panel title="Validation" icon={CheckCircle2}>
                 <div className="grid gap-3 md:grid-cols-2">
-                  {validation.checks.map((check) => (
+                  {blockingChecks.map((check) => (
                     <div
                       key={check.label}
                       className={cn(
@@ -720,9 +939,42 @@ export function CrosswordCms({
                     </div>
                   ))}
                 </div>
+
+                {advisoryChecks.length > 0 ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {advisoryChecks.map((check) => (
+                      <div
+                        key={check.label}
+                        className={cn(
+                          "rounded-[22px] border px-4 py-4",
+                          check.passed
+                            ? "border-[#b9c7a9]/40 bg-[#f7f4e8]"
+                            : "border-[#e0cf9b]/40 bg-[#fff8e4]"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-semibold text-[#243629]">
+                          {check.passed ? (
+                            <CheckCircle2 className="h-4 w-4 text-[#738b50]" />
+                          ) : (
+                            <CircleAlert className="h-4 w-4 text-[#c08b2b]" />
+                          )}
+                          {check.label}
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-[#5d644e]">
+                          {check.detail}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
                 {validation.errors.length > 0 ? (
                   <div className="mt-4 rounded-[22px] border border-[#e0b49b]/40 bg-[#fff1e8] px-4 py-4 text-sm text-[#7d4a29]">
                     {validation.errors[0]}
+                  </div>
+                ) : validation.warnings.length > 0 ? (
+                  <div className="mt-4 rounded-[22px] border border-[#e0cf9b]/40 bg-[#fff8e4] px-4 py-4 text-sm text-[#8b6a26]">
+                    {validation.warnings[0]}
                   </div>
                 ) : null}
               </Panel>
@@ -745,6 +997,68 @@ export function CrosswordCms({
 
             <aside className="space-y-6">
               <CrosswordPreview draft={draft} words={validation.words} />
+
+              <Panel title="Construction playbook" icon={ListChecks}>
+                <div className="space-y-4">
+                  {RULEBOOK.slice(3).map((rule) => {
+                    const Icon = rule.icon
+
+                    return (
+                      <div
+                        key={rule.title}
+                        className="rounded-[24px] border border-[#284130]/10 bg-[#f8f4e6] p-4"
+                      >
+                        <div className="flex items-center gap-3 text-[#26402e]">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white">
+                            <Icon className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="text-[11px] font-semibold tracking-[0.22em] text-[#7a856e] uppercase">
+                              {rule.eyebrow}
+                            </div>
+                            <div className="text-sm font-semibold text-[#243629]">
+                              {rule.title}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 space-y-2 text-sm leading-6 text-[#586554]">
+                          {rule.items.map((item) => (
+                            <p key={item}>{item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  <div className="rounded-[24px] border border-[#284130]/10 bg-white p-4">
+                    <div className="text-[11px] font-semibold tracking-[0.22em] text-[#7a856e] uppercase">
+                      Difficulty mix
+                    </div>
+                    <div className="mt-3 space-y-2 text-sm leading-6 text-[#586554]">
+                      {DIFFICULTY_MIX.map((item) => (
+                        <p key={item.label}>
+                          <span className="font-semibold text-[#243629]">
+                            {item.label}:
+                          </span>{" "}
+                          {item.detail}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel title="Prompt kit" icon={BrainCircuit}>
+                <div className="space-y-3">
+                  <p className="text-sm leading-6 text-[#586554]">
+                    Use this whenever you want the generator prompt to stay
+                    structure-first instead of word-first.
+                  </p>
+                  <pre className="overflow-x-auto rounded-[24px] border border-[#284130]/10 bg-[#f8f4e6] p-4 text-xs leading-6 text-[#33422f]">
+                    <code>{PROMPT_TEMPLATE}</code>
+                  </pre>
+                </div>
+              </Panel>
 
               <Panel title="Scheduled puzzles" icon={Database}>
                 <div className="space-y-3">
@@ -849,11 +1163,15 @@ function ClueEditor({
                     : word.answer.padEnd(word.answer.length, "_")}
                 </span>
               </div>
+              <div className="text-xs text-[#6a7464]">
+                {word.answer.length} letters - direct, riddle, relatable, or
+                playful.
+              </div>
               <textarea
                 rows={2}
                 value={clues[word.id] ?? ""}
                 onChange={(event) => onChange(word.id, event.target.value)}
-                placeholder="Write the clue players will read..."
+                placeholder="Write a clue players can solve without it giving the answer away..."
                 className="resize-none rounded-2xl border border-[#284130]/12 bg-white px-4 py-3 text-sm text-[#203124] transition outline-none placeholder:text-[#9aa18f] focus:border-[#d47538]"
               />
             </label>
@@ -902,6 +1220,17 @@ function findFirstEditableCell(draft: CrosswordDraft) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+function clampToFixedGridSize(value: number) {
+  return (
+    FIXED_GRID_SIZES.find((size) => size >= value) ??
+    FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
+  )
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`
 }
 
 function parseSeedWords(value: string): SeedWord[] {
