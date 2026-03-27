@@ -11,7 +11,7 @@ import {
   listPuzzleSchedule,
   savePuzzle,
 } from "@/lib/crossword-puzzle-store"
-import { getLocalDateKey } from "@/lib/crossword-schedule"
+import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
 
 export const dynamic = "force-dynamic"
 
@@ -32,8 +32,20 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const draft = (await request.json()) as CrosswordDraft
-    const validation = validateCrosswordDraft(draft)
+    const payload = (await request.json()) as CrosswordDraft | CrosswordPuzzle
+
+    if (isCrosswordPuzzle(payload)) {
+      const savedPuzzle = await savePuzzle(payload)
+      const schedule = await listPuzzleSchedule()
+
+      return NextResponse.json({
+        puzzle: savedPuzzle,
+        schedule,
+        databaseConnected: isDatabaseEnabled(),
+      })
+    }
+
+    const validation = validateCrosswordDraft(payload)
 
     if (validation.errors.length > 0) {
       return NextResponse.json(
@@ -42,7 +54,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const puzzle = buildPuzzleFromDraft(draft)
+    const puzzle = buildPuzzleFromDraft(payload)
     const savedPuzzle = await savePuzzle(puzzle)
     const schedule = await listPuzzleSchedule()
 
@@ -61,4 +73,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: message }, { status: 500 })
   }
+}
+
+function isCrosswordPuzzle(
+  value: CrosswordDraft | CrosswordPuzzle
+): value is CrosswordPuzzle {
+  return Array.isArray((value as CrosswordPuzzle).clues)
 }

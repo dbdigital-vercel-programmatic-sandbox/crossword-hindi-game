@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react"
 import { Plus, Trash2 } from "lucide-react"
 
-import type { CrosswordPuzzle } from "@/lib/crossword-schedule"
+import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
 
 type BuilderWord = {
   id: string
@@ -37,6 +37,9 @@ type ClueItem = {
   number: number
   clue: string
   answer: string
+  row: number
+  col: number
+  direction: Direction
 }
 
 type LayoutResult = {
@@ -44,6 +47,7 @@ type LayoutResult = {
   across: ClueItem[]
   down: ClueItem[]
   unplaced: BuilderWord[]
+  placements: Placement[]
 }
 
 type CandidatePlacement = {
@@ -62,9 +66,18 @@ export function CrosswordCms({
   initialPuzzles: CrosswordPuzzle[]
   databaseConnected: boolean
 }) {
+  const [puzzles, setPuzzles] = useState(initialPuzzles)
   const [form, setForm] = useState({ word: "", clue: "" })
+  const [title, setTitle] = useState("Untitled Puzzle")
+  const [scheduledDate, setScheduledDate] = useState(getLocalDateKey())
   const [words, setWords] = useState<BuilderWord[]>([])
   const [error, setError] = useState("")
+  const [saveMessage, setSaveMessage] = useState(
+    databaseConnected
+      ? "Choose a date to schedule this crossword."
+      : "Database offline. You can still build and preview locally."
+  )
+  const [isSaving, setIsSaving] = useState(false)
 
   const layout = useMemo(() => buildCrosswordLayout(words), [words])
 
@@ -105,6 +118,66 @@ export function CrosswordCms({
     setWords((current) => current.filter((word) => word.id !== id))
   }
 
+  async function handleScheduleSave() {
+    if (!databaseConnected) {
+      setError("Connect the database before scheduling a puzzle.")
+      return
+    }
+
+    if (!title.trim()) {
+      setError("Add a puzzle title before scheduling.")
+      return
+    }
+
+    if (!scheduledDate) {
+      setError("Choose a schedule date.")
+      return
+    }
+
+    if (layout.placements.length === 0) {
+      setError("Add words before scheduling a crossword.")
+      return
+    }
+
+    setIsSaving(true)
+    setError("")
+    setSaveMessage("Saving scheduled crossword...")
+
+    try {
+      const puzzle = buildScheduledPuzzle(layout, title, scheduledDate)
+      const response = await fetch("/api/puzzles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(puzzle),
+      })
+      const data = (await response.json()) as {
+        error?: string
+        puzzle?: CrosswordPuzzle
+      }
+
+      if (!response.ok || !data.puzzle) {
+        throw new Error(data.error ?? "Unable to save this schedule.")
+      }
+
+      setPuzzles((current) => {
+        const next = current.filter((item) => item.date !== data.puzzle!.date)
+        return [...next, data.puzzle!].sort((left, right) =>
+          left.date.localeCompare(right.date)
+        )
+      })
+      setSaveMessage(`Scheduled for ${data.puzzle.date}.`)
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to save this schedule."
+      )
+      setSaveMessage("Schedule save failed.")
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f4efe6] px-4 py-6 text-[#1e2b20] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -120,6 +193,9 @@ export function CrosswordCms({
               <p className="mt-3 max-w-3xl text-sm leading-6 text-[#5f675f]">
                 Every time you add or remove a word, the builder recomputes a
                 crossword-style layout and renumbers the clue list.
+              </p>
+              <p className="mt-2 text-sm leading-6 text-[#5f675f]">
+                Schedule the finished board when you are ready to publish it.
               </p>
             </div>
 
@@ -143,6 +219,30 @@ export function CrosswordCms({
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold">Add word</h2>
               <form className="mt-4 space-y-4" onSubmit={handleAddWord}>
+                <label className="grid gap-2 text-sm">
+                  <span className="font-medium text-[#455045]">
+                    Puzzle title
+                  </span>
+                  <input
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                    placeholder="Weekend Crossword"
+                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                  />
+                </label>
+
+                <label className="grid gap-2 text-sm">
+                  <span className="font-medium text-[#455045]">
+                    Schedule date
+                  </span>
+                  <input
+                    type="date"
+                    value={scheduledDate}
+                    onChange={(event) => setScheduledDate(event.target.value)}
+                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                  />
+                </label>
+
                 <label className="grid gap-2 text-sm">
                   <span className="font-medium text-[#455045]">Word</span>
                   <input
@@ -190,6 +290,19 @@ export function CrosswordCms({
                   {error}
                 </div>
               ) : null}
+
+              <div className="mt-4 rounded-2xl bg-[#f6f3ec] px-4 py-3 text-sm text-[#5f675f]">
+                {saveMessage}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleScheduleSave}
+                disabled={isSaving || !databaseConnected}
+                className="mt-4 inline-flex items-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
+              >
+                {isSaving ? "Saving..." : "Save Schedule"}
+              </button>
             </section>
 
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
@@ -302,6 +415,44 @@ export function CrosswordCms({
                 <ClueColumn title="Down" items={layout.down} />
               </div>
             </section>
+
+            <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">Schedule</h2>
+                <span className="text-sm text-[#5f675f]">
+                  {puzzles.length} saved
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {puzzles.length === 0 ? (
+                  <div className="rounded-2xl bg-[#f6f3ec] px-4 py-5 text-sm text-[#6a7268]">
+                    No scheduled crosswords yet.
+                  </div>
+                ) : (
+                  puzzles.map((puzzle) => (
+                    <div
+                      key={puzzle.id}
+                      className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-semibold text-[#243026]">
+                            {puzzle.title}
+                          </div>
+                          <div className="mt-1 text-sm text-[#5f675f]">
+                            {puzzle.date}
+                          </div>
+                        </div>
+                        <div className="text-xs tracking-[0.16em] text-[#81877d] uppercase">
+                          {puzzle.clues.length} clues
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
           </section>
         </div>
       </div>
@@ -345,6 +496,7 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
       across: [],
       down: [],
       unplaced: [],
+      placements: [],
     }
   }
 
@@ -403,6 +555,7 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
       across: [],
       down: [],
       unplaced,
+      placements,
     }
   }
 
@@ -449,6 +602,9 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
         number: placement.number,
         clue: placement.clue,
         answer: placement.answer,
+        row: placement.row - bounds.minRow,
+        col: placement.col - bounds.minCol,
+        direction: placement.direction,
       })),
     down: placements
       .filter((placement) => placement.direction === "down")
@@ -458,8 +614,12 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
         number: placement.number,
         clue: placement.clue,
         answer: placement.answer,
+        row: placement.row - bounds.minRow,
+        col: placement.col - bounds.minCol,
+        direction: placement.direction,
       })),
     unplaced,
+    placements,
   }
 }
 
@@ -699,4 +859,46 @@ function getFilledBounds(board: BoardCell[][]) {
   }
 
   return { minRow, maxRow, minCol, maxCol }
+}
+
+function buildScheduledPuzzle(
+  layout: LayoutResult,
+  title: string,
+  date: string
+): CrosswordPuzzle {
+  const clues = [...layout.across, ...layout.down].sort((left, right) => {
+    if (left.number !== right.number) {
+      return left.number - right.number
+    }
+
+    return left.direction.localeCompare(right.direction)
+  })
+
+  return {
+    id: createPuzzleId(title, date),
+    title: title.trim(),
+    date,
+    rows: layout.cells.length,
+    cols: layout.cells[0]?.length ?? 0,
+    clues: clues.map((clue) => ({
+      id: clue.id,
+      number: clue.number,
+      direction: clue.direction,
+      clue: clue.clue,
+      answer: clue.answer,
+      row: clue.row,
+      col: clue.col,
+    })),
+    givenCells: [],
+  }
+}
+
+function createPuzzleId(title: string, date: string) {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+
+  return `${slug || "crossword"}-${date}`
 }
