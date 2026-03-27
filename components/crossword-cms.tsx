@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
 
 type BuilderWord = {
@@ -86,7 +87,11 @@ export function CrosswordCms({
       : "Database offline. You can still build and preview locally."
   )
   const [isSaving, setIsSaving] = useState(false)
-  const [isPublishOpen, setIsPublishOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState("add-word")
+  const [isLoadOpen, setIsLoadOpen] = useState(false)
+  const [selectedLoadDate, setSelectedLoadDate] = useState(
+    initialPuzzles.at(-1)?.date ?? ""
+  )
 
   const layout = useMemo(() => buildCrosswordLayout(words), [words])
   const scheduledDates = useMemo(
@@ -182,7 +187,6 @@ export function CrosswordCms({
           left.date.localeCompare(right.date)
         )
       })
-      setIsPublishOpen(false)
       setSaveMessage(`Scheduled for ${data.puzzle.date}.`)
     } catch (saveError) {
       setError(
@@ -196,6 +200,31 @@ export function CrosswordCms({
     }
   }
 
+  function handleOpenLoadDialog() {
+    setSelectedLoadDate((current) => current || scheduledDates.at(-1) || "")
+    setError("")
+    setIsLoadOpen(true)
+  }
+
+  function handleLoadPuzzle() {
+    const puzzle = puzzles.find((item) => item.date === selectedLoadDate)
+
+    if (!puzzle) {
+      setError("Choose a published puzzle date to load.")
+      return
+    }
+
+    setTitle(puzzle.title)
+    setScheduledDate(puzzle.date)
+    setWords(createBuilderWordsFromPuzzle(puzzle))
+    setError("")
+    setSaveMessage(
+      `Loaded ${puzzle.title} for ${puzzle.date}. Edit it, then publish again to save the update.`
+    )
+    setActiveTab("add-word")
+    setIsLoadOpen(false)
+  }
+
   return (
     <main className="min-h-screen bg-[#f4efe6] px-4 py-6 text-[#1e2b20] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -206,14 +235,15 @@ export function CrosswordCms({
                 Crossword Puzzle Builder
               </p>
               <h1 className="mt-2 text-3xl font-semibold tracking-[-0.03em]">
-                Add words, auto-build the grid, and review clues.
+                Build, load, and update crossword puzzles.
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-[#5f675f]">
                 Every time you add or remove a word, the builder recomputes a
                 crossword-style layout and renumbers the clue list.
               </p>
               <p className="mt-2 text-sm leading-6 text-[#5f675f]">
-                Schedule the finished board when you are ready to publish it.
+                Use Add Word to shape the board, then switch to Publish Puzzle
+                to schedule a new puzzle or update one that is already live.
               </p>
             </div>
 
@@ -235,61 +265,174 @@ export function CrosswordCms({
         <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
           <section className="space-y-6">
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold">Add word</h2>
-              <form className="mt-4 space-y-4" onSubmit={handleAddWord}>
-                <label className="grid gap-2 text-sm">
-                  <span className="font-medium text-[#455045]">
-                    Puzzle title
-                  </span>
-                  <input
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    placeholder="Weekend Crossword"
-                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
-                  />
-                </label>
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <TabsList className="h-auto w-full rounded-2xl bg-[#f3eee5] p-1">
+                  <TabsTrigger
+                    value="add-word"
+                    className="rounded-[18px] px-4 py-2 text-sm data-active:bg-white"
+                  >
+                    Add Word
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="publish"
+                    className="rounded-[18px] px-4 py-2 text-sm data-active:bg-white"
+                  >
+                    Publish Puzzle
+                  </TabsTrigger>
+                </TabsList>
 
-                <label className="grid gap-2 text-sm">
-                  <span className="font-medium text-[#455045]">Word</span>
-                  <input
-                    value={form.word}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        word: event.target.value,
-                      }))
-                    }
-                    placeholder="MARKET"
-                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 uppercase transition outline-none focus:border-[#8f7f5b]"
-                  />
-                </label>
+                <TabsContent value="add-word" className="mt-5">
+                  <h2 className="text-lg font-semibold">Add word</h2>
+                  <form className="mt-4 space-y-4" onSubmit={handleAddWord}>
+                    <label className="grid gap-2 text-sm">
+                      <span className="font-medium text-[#455045]">
+                        Puzzle title
+                      </span>
+                      <input
+                        value={title}
+                        onChange={(event) => setTitle(event.target.value)}
+                        placeholder="Weekend Crossword"
+                        className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                      />
+                    </label>
 
-                <label className="grid gap-2 text-sm">
-                  <span className="font-medium text-[#455045]">
-                    Clue / hint
-                  </span>
-                  <textarea
-                    rows={3}
-                    value={form.clue}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        clue: event.target.value,
-                      }))
-                    }
-                    placeholder="Weekend bargain stop"
-                    className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
-                  />
-                </label>
+                    <label className="grid gap-2 text-sm">
+                      <span className="font-medium text-[#455045]">Word</span>
+                      <input
+                        value={form.word}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            word: event.target.value,
+                          }))
+                        }
+                        placeholder="MARKET"
+                        className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 uppercase transition outline-none focus:border-[#8f7f5b]"
+                      />
+                    </label>
 
-                <button
-                  type="submit"
-                  className="inline-flex items-center gap-2 rounded-full bg-[#28352b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f2a22]"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Word
-                </button>
-              </form>
+                    <label className="grid gap-2 text-sm">
+                      <span className="font-medium text-[#455045]">
+                        Clue / hint
+                      </span>
+                      <textarea
+                        rows={3}
+                        value={form.clue}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            clue: event.target.value,
+                          }))
+                        }
+                        placeholder="Weekend bargain stop"
+                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                      />
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-2 rounded-full bg-[#28352b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f2a22]"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Word
+                    </button>
+                  </form>
+                </TabsContent>
+
+                <TabsContent value="publish" className="mt-5 space-y-5">
+                  <div>
+                    <h2 className="text-lg font-semibold">Publish puzzle</h2>
+                    <p className="mt-2 text-sm leading-6 text-[#5f675f]">
+                      Pick a date, then publish the current board. If that date
+                      already has a puzzle, publishing will replace it.
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
+                    <div className="font-medium text-[#243026]">
+                      {title.trim() || "Untitled Puzzle"}
+                    </div>
+                    <div className="mt-1">
+                      {words.length} word{words.length === 1 ? "" : "s"} in the
+                      current builder.
+                    </div>
+                  </div>
+
+                  <label className="grid gap-2 text-sm">
+                    <span className="font-medium text-[#455045]">
+                      Publish date
+                    </span>
+                    <input
+                      type="date"
+                      value={scheduledDate}
+                      onChange={(event) => setScheduledDate(event.target.value)}
+                      className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                    />
+                  </label>
+
+                  <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
+                    {hasScheduledDate
+                      ? `A puzzle is already scheduled for ${scheduledDate}. Publishing will replace it.`
+                      : scheduledDate
+                        ? `No puzzle is scheduled for ${scheduledDate} yet.`
+                        : "Choose a date to publish this puzzle."}
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
+                        Scheduled dates
+                      </h3>
+                      <span className="text-xs text-[#7a7468]">
+                        {scheduledDates.length} total
+                      </span>
+                    </div>
+
+                    {scheduledDates.length === 0 ? (
+                      <div className="rounded-2xl bg-[#f6f3ec] px-4 py-4 text-sm text-[#6a7268]">
+                        No scheduled dates yet.
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {scheduledDates.map((date) => (
+                          <button
+                            key={date}
+                            type="button"
+                            onClick={() => setScheduledDate(date)}
+                            className={
+                              date === scheduledDate
+                                ? "rounded-full border border-[#8f7f5b] bg-[#8f7f5b] px-3 py-1.5 text-xs font-semibold text-white"
+                                : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f] transition hover:border-[#b6aa90] hover:text-[#2a332a]"
+                            }
+                          >
+                            {date}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={handleOpenLoadDialog}
+                      disabled={puzzles.length === 0}
+                      className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045] transition hover:border-[#bdb4a6] hover:text-[#1f2a22] disabled:cursor-not-allowed disabled:border-[#e1dbcf] disabled:text-[#a39b8e]"
+                    >
+                      Load Puzzle
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleScheduleSave}
+                      disabled={isSaving || !databaseConnected}
+                      className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
+                    >
+                      {isSaving ? "Publishing..." : "Publish Puzzle"}
+                    </button>
+                  </div>
+                </TabsContent>
+              </Tabs>
 
               {error ? (
                 <div className="mt-4 rounded-2xl border border-[#e2c8b7] bg-[#fff5ef] px-4 py-3 text-sm text-[#91563a]">
@@ -300,18 +443,6 @@ export function CrosswordCms({
               <div className="mt-4 rounded-2xl bg-[#f6f3ec] px-4 py-3 text-sm text-[#5f675f]">
                 {saveMessage}
               </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setError("")
-                  setIsPublishOpen(true)
-                }}
-                disabled={!databaseConnected}
-                className="mt-4 inline-flex items-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
-              >
-                Publish Puzzle
-              </button>
             </section>
 
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
@@ -466,44 +597,26 @@ export function CrosswordCms({
         </div>
       </div>
 
-      <Dialog open={isPublishOpen} onOpenChange={setIsPublishOpen}>
+      <Dialog open={isLoadOpen} onOpenChange={setIsLoadOpen}>
         <DialogContent
           className="max-w-lg rounded-[28px] border border-[#d8d1c4] bg-[#fffdf8] p-0 text-[#1e2b20] shadow-xl"
           showCloseButton={false}
         >
           <DialogHeader className="border-b border-[#ebe4d8] px-6 pt-6 pb-4">
             <DialogTitle className="text-xl font-semibold tracking-[-0.02em] text-[#1e2b20]">
-              Publish crossword
+              Load published puzzle
             </DialogTitle>
             <DialogDescription className="text-sm leading-6 text-[#5f675f]">
-              Choose the date for this puzzle and review every date that already
-              has a scheduled crossword.
+              Pick a published date, load that puzzle into the builder, then
+              edit and publish it again to save the fix.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-5 px-6 py-5">
-            <label className="grid gap-2 text-sm">
-              <span className="font-medium text-[#455045]">Publish date</span>
-              <input
-                type="date"
-                value={scheduledDate}
-                onChange={(event) => setScheduledDate(event.target.value)}
-                className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
-              />
-            </label>
-
-            <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
-              {hasScheduledDate
-                ? `A puzzle is already scheduled for ${scheduledDate}. Publishing will replace it.`
-                : scheduledDate
-                  ? `No puzzle is scheduled for ${scheduledDate} yet.`
-                  : "Choose a date to publish this puzzle."}
-            </div>
-
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
-                  Scheduled dates
+                  Published dates
                 </h3>
                 <span className="text-xs text-[#7a7468]">
                   {scheduledDates.length} total
@@ -520,9 +633,9 @@ export function CrosswordCms({
                     <button
                       key={date}
                       type="button"
-                      onClick={() => setScheduledDate(date)}
+                      onClick={() => setSelectedLoadDate(date)}
                       className={
-                        date === scheduledDate
+                        date === selectedLoadDate
                           ? "rounded-full border border-[#8f7f5b] bg-[#8f7f5b] px-3 py-1.5 text-xs font-semibold text-white"
                           : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f] transition hover:border-[#b6aa90] hover:text-[#2a332a]"
                       }
@@ -538,7 +651,7 @@ export function CrosswordCms({
           <DialogFooter className="rounded-b-[28px] border-t border-[#ebe4d8] bg-[#f7f2e8] px-6 py-4 sm:justify-between">
             <button
               type="button"
-              onClick={() => setIsPublishOpen(false)}
+              onClick={() => setIsLoadOpen(false)}
               className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045] transition hover:border-[#bdb4a6] hover:text-[#1f2a22]"
             >
               Cancel
@@ -546,11 +659,11 @@ export function CrosswordCms({
 
             <button
               type="button"
-              onClick={handleScheduleSave}
-              disabled={isSaving || !databaseConnected}
+              onClick={handleLoadPuzzle}
+              disabled={!selectedLoadDate}
               className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
             >
-              {isSaving ? "Publishing..." : "Publish"}
+              Load Puzzle
             </button>
           </DialogFooter>
         </DialogContent>
@@ -740,6 +853,22 @@ function createWordId() {
   const id = `word-${nextWordId}`
   nextWordId += 1
   return id
+}
+
+function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
+  return [...puzzle.clues]
+    .sort((left, right) => {
+      if (left.number !== right.number) {
+        return left.number - right.number
+      }
+
+      return left.direction.localeCompare(right.direction)
+    })
+    .map((clue) => ({
+      id: createWordId(),
+      answer: normalizeAnswer(clue.answer),
+      clue: clue.clue,
+    }))
 }
 
 function getBoardSize(words: BuilderWord[]) {
