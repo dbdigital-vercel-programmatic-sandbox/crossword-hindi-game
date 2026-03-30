@@ -12,6 +12,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  deriveWordsFromDraft,
+  FIXED_GRID_SIZES,
+  generateCompactDraftFromWordList,
+  keyFor,
+  type CrosswordDraft,
+} from "@/lib/crossword-editor"
 import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
 
 type BuilderWord = {
@@ -21,19 +28,6 @@ type BuilderWord = {
 }
 
 type Direction = "across" | "down"
-
-type Placement = BuilderWord & {
-  row: number
-  col: number
-  direction: Direction
-  number: number
-}
-
-type BoardCell = {
-  letter: string
-  across: boolean
-  down: boolean
-}
 
 type GridCell = {
   letter: string
@@ -52,22 +46,16 @@ type ClueItem = {
 }
 
 type LayoutResult = {
+  draft: CrosswordDraft | null
   cells: GridCell[][]
   across: ClueItem[]
   down: ClueItem[]
   unplaced: BuilderWord[]
-  placements: Placement[]
-}
-
-type CandidatePlacement = {
-  row: number
-  col: number
-  direction: Direction
-  intersections: number
+  recommendationLabel: string
 }
 
 let nextWordId = 1
-const CMS_GRID_SIZE = 9
+const MAX_GRID_SIZE = FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
 
 export function CrosswordCms({
   initialPuzzles,
@@ -94,7 +82,10 @@ export function CrosswordCms({
     initialPuzzles.at(-1)?.date ?? ""
   )
 
-  const layout = useMemo(() => buildCrosswordLayout(words), [words])
+  const layout = useMemo(
+    () => buildCrosswordLayout(words, title, scheduledDate),
+    [scheduledDate, title, words]
+  )
   const scheduledDates = useMemo(
     () =>
       puzzles
@@ -110,14 +101,14 @@ export function CrosswordCms({
     const answer = normalizeAnswer(form.word)
     const clue = form.clue.trim()
 
-    if (answer.length < 2) {
-      setError("Enter a word with at least 2 letters.")
+    if (answer.length < 3) {
+      setError("Enter a word with at least 3 letters.")
       return
     }
 
-    if (answer.length > CMS_GRID_SIZE) {
+    if (answer.length > MAX_GRID_SIZE) {
       setError(
-        `Keep answers to ${CMS_GRID_SIZE} letters or fewer for the 9x9 grid.`
+        `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
       )
       return
     }
@@ -164,14 +155,14 @@ export function CrosswordCms({
       return
     }
 
-    if (layout.placements.length === 0) {
+    if (!layout.draft || layout.across.length + layout.down.length === 0) {
       setError("Add words before scheduling a crossword.")
       return
     }
 
     if (layout.unplaced.length > 0) {
       setError(
-        "Remove or shorten the words that do not fit the 9x9 grid before publishing."
+        `Remove or shorten the words that do not fit within the compact ${MAX_GRID_SIZE}x${MAX_GRID_SIZE} limit before publishing.`
       )
       return
     }
@@ -253,8 +244,9 @@ export function CrosswordCms({
                 Build, load, and update crossword puzzles.
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-[#5f675f]">
-                Every time you add or remove a word, the builder recomputes a
-                fixed 9x9 crossword layout and renumbers the clue list.
+                Every time you add or remove a word, the builder recomputes the
+                most compact crossword layout it can fit into 7x7, 9x9, or 11x11
+                and renumbers the clue list.
               </p>
               <p className="mt-2 text-sm leading-6 text-[#5f675f]">
                 Use Add Word to shape the board, then switch to Publish Puzzle
@@ -516,6 +508,10 @@ export function CrosswordCms({
                 </div>
               </div>
 
+              <div className="mt-2 text-sm text-[#5f675f]">
+                {layout.recommendationLabel}
+              </div>
+
               {layout.unplaced.length > 0 ? (
                 <div className="mt-4 rounded-2xl border border-[#e2c8b7] bg-[#fff5ef] px-4 py-3 text-sm text-[#91563a]">
                   Could not place:{" "}
@@ -716,130 +712,63 @@ function ClueColumn({ title, items }: { title: string; items: ClueItem[] }) {
   )
 }
 
-function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
+function buildCrosswordLayout(
+  words: BuilderWord[],
+  title: string,
+  date: string
+): LayoutResult {
   if (words.length === 0) {
     return {
+      draft: null,
       cells: [],
       across: [],
       down: [],
       unplaced: [],
-      placements: [],
+      recommendationLabel: "Add a few words to generate a compact grid.",
     }
   }
 
-  const board = createBoard(CMS_GRID_SIZE)
-  const sortedWords = [...words].sort(
-    (left, right) => right.answer.length - left.answer.length
-  )
-  const placements: Placement[] = []
-  const unplaced: BuilderWord[] = []
-
-  const firstWord = sortedWords[0]
-  const centerRow = Math.floor(CMS_GRID_SIZE / 2)
-  const centerCol = Math.floor((CMS_GRID_SIZE - firstWord.answer.length) / 2)
-
-  applyPlacement(board, {
-    ...firstWord,
-    row: centerRow,
-    col: centerCol,
-    direction: "across",
-    number: 0,
+  const result = generateCompactDraftFromWordList({
+    words: words.map((word) => ({ answer: word.answer, clue: word.clue })),
+    title,
+    date,
   })
-  placements.push({
-    ...firstWord,
-    row: centerRow,
-    col: centerCol,
-    direction: "across",
-    number: 0,
+  const derivedWords = deriveWordsFromDraft(result.draft)
+  const startNumbers = new Map<string, number>()
+
+  derivedWords.forEach((word) => {
+    startNumbers.set(keyFor(word.row, word.col), word.number)
   })
 
-  sortedWords.slice(1).forEach((word) => {
-    const candidate =
-      findIntersectionPlacement(board, word) ?? findOpenPlacement(board, word)
-
-    if (!candidate) {
-      unplaced.push(word)
-      return
-    }
-
-    const placement = {
-      ...word,
-      row: candidate.row,
-      col: candidate.col,
-      direction: candidate.direction,
-      number: 0,
-    } satisfies Placement
-
-    applyPlacement(board, placement)
-    placements.push(placement)
-  })
-
-  const cells: GridCell[][] = board.map((row) =>
-    row.map((cell) => ({
+  const cells = result.draft.cells.map((row, rowIndex) =>
+    row.map((cell, colIndex) => ({
       letter: cell.letter,
-      number: null,
-      filled: Boolean(cell.letter),
+      number: startNumbers.get(keyFor(rowIndex, colIndex)) ?? null,
+      filled: !cell.isBlock,
     }))
   )
-
-  let nextNumber = 1
-  for (let row = 0; row < CMS_GRID_SIZE; row += 1) {
-    for (let col = 0; col < CMS_GRID_SIZE; col += 1) {
-      const starts = placements.filter(
-        (placement) => placement.row === row && placement.col === col
-      )
-
-      if (starts.length === 0) {
-        continue
-      }
-
-      starts.forEach((placement) => {
-        placement.number = nextNumber
-      })
-      cells[row][col].number = nextNumber
-      nextNumber += 1
-    }
-  }
+  const clues = derivedWords.map((word) => ({
+    id: word.id,
+    number: word.number,
+    clue: word.clue,
+    answer: word.answer,
+    row: word.row,
+    col: word.col,
+    direction: word.direction,
+  }))
 
   return {
+    draft: result.draft,
     cells,
-    across: placements
-      .filter((placement) => placement.direction === "across")
-      .sort((left, right) => left.number - right.number)
-      .map((placement) => ({
-        id: placement.id,
-        number: placement.number,
-        clue: placement.clue,
-        answer: placement.answer,
-        row: placement.row,
-        col: placement.col,
-        direction: placement.direction,
-      })),
-    down: placements
-      .filter((placement) => placement.direction === "down")
-      .sort((left, right) => left.number - right.number)
-      .map((placement) => ({
-        id: placement.id,
-        number: placement.number,
-        clue: placement.clue,
-        answer: placement.answer,
-        row: placement.row,
-        col: placement.col,
-        direction: placement.direction,
-      })),
-    unplaced,
-    placements,
+    across: clues.filter((clue) => clue.direction === "across"),
+    down: clues.filter((clue) => clue.direction === "down"),
+    unplaced: result.unplacedWords.map((word, index) => ({
+      id: `unplaced-${index}-${word.answer}`,
+      answer: word.answer,
+      clue: word.clue ?? "",
+    })),
+    recommendationLabel: result.recommendation.label,
   }
-}
-
-function createBoard(size: number) {
-  return Array.from({ length: size }, () =>
-    Array.from({ length: size }, () => ({
-      letter: "",
-      across: false,
-      down: false,
-    }))
-  )
 }
 
 function normalizeAnswer(value: string) {
@@ -866,193 +795,6 @@ function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
       answer: normalizeAnswer(clue.answer),
       clue: clue.clue,
     }))
-}
-
-function findIntersectionPlacement(board: BoardCell[][], word: BuilderWord) {
-  const size = board.length
-  const candidates: CandidatePlacement[] = []
-
-  for (let row = 0; row < size; row += 1) {
-    for (let col = 0; col < size; col += 1) {
-      const boardLetter = board[row][col].letter
-      if (!boardLetter) {
-        continue
-      }
-
-      for (let index = 0; index < word.answer.length; index += 1) {
-        if (word.answer[index] !== boardLetter) {
-          continue
-        }
-
-        const acrossCandidate = evaluatePlacement(
-          board,
-          word.answer,
-          row,
-          col - index,
-          "across"
-        )
-        if (acrossCandidate && acrossCandidate.intersections > 0) {
-          candidates.push(acrossCandidate)
-        }
-
-        const downCandidate = evaluatePlacement(
-          board,
-          word.answer,
-          row - index,
-          col,
-          "down"
-        )
-        if (downCandidate && downCandidate.intersections > 0) {
-          candidates.push(downCandidate)
-        }
-      }
-    }
-  }
-
-  return pickBestCandidate(candidates, board.length)
-}
-
-function findOpenPlacement(board: BoardCell[][], word: BuilderWord) {
-  const size = board.length
-  const candidates: CandidatePlacement[] = []
-
-  for (let row = 0; row < size; row += 1) {
-    for (let col = 0; col < size; col += 1) {
-      const acrossCandidate = evaluatePlacement(
-        board,
-        word.answer,
-        row,
-        col,
-        "across"
-      )
-      if (acrossCandidate) {
-        candidates.push(acrossCandidate)
-      }
-
-      const downCandidate = evaluatePlacement(
-        board,
-        word.answer,
-        row,
-        col,
-        "down"
-      )
-      if (downCandidate) {
-        candidates.push(downCandidate)
-      }
-    }
-  }
-
-  return pickBestCandidate(candidates, board.length)
-}
-
-function pickBestCandidate(
-  candidates: CandidatePlacement[],
-  boardSize: number
-) {
-  const center = Math.floor(boardSize / 2)
-
-  return candidates.sort((left, right) => {
-    if (right.intersections !== left.intersections) {
-      return right.intersections - left.intersections
-    }
-
-    const leftDistance =
-      Math.abs(left.row - center) + Math.abs(left.col - center)
-    const rightDistance =
-      Math.abs(right.row - center) + Math.abs(right.col - center)
-
-    return leftDistance - rightDistance
-  })[0]
-}
-
-function evaluatePlacement(
-  board: BoardCell[][],
-  answer: string,
-  startRow: number,
-  startCol: number,
-  direction: Direction
-) {
-  const size = board.length
-  const rowStep = direction === "down" ? 1 : 0
-  const colStep = direction === "across" ? 1 : 0
-  const endRow = startRow + rowStep * (answer.length - 1)
-  const endCol = startCol + colStep * (answer.length - 1)
-
-  if (
-    startRow < 0 ||
-    startCol < 0 ||
-    endRow >= size ||
-    endCol >= size ||
-    hasLetter(board, startRow - rowStep, startCol - colStep) ||
-    hasLetter(board, endRow + rowStep, endCol + colStep)
-  ) {
-    return null
-  }
-
-  let intersections = 0
-
-  for (let index = 0; index < answer.length; index += 1) {
-    const row = startRow + rowStep * index
-    const col = startCol + colStep * index
-    const cell = board[row][col]
-    const letter = answer[index]
-
-    if (cell.letter && cell.letter !== letter) {
-      return null
-    }
-
-    if (
-      (direction === "across" && cell.across) ||
-      (direction === "down" && cell.down)
-    ) {
-      return null
-    }
-
-    if (cell.letter) {
-      intersections += 1
-      continue
-    }
-
-    if (
-      direction === "across" &&
-      (hasLetter(board, row - 1, col) || hasLetter(board, row + 1, col))
-    ) {
-      return null
-    }
-
-    if (
-      direction === "down" &&
-      (hasLetter(board, row, col - 1) || hasLetter(board, row, col + 1))
-    ) {
-      return null
-    }
-  }
-
-  return {
-    row: startRow,
-    col: startCol,
-    direction,
-    intersections,
-  } satisfies CandidatePlacement
-}
-
-function applyPlacement(board: BoardCell[][], placement: Placement) {
-  placement.answer.split("").forEach((letter, index) => {
-    const row = placement.row + (placement.direction === "down" ? index : 0)
-    const col = placement.col + (placement.direction === "across" ? index : 0)
-    const cell = board[row][col]
-
-    cell.letter = letter
-    if (placement.direction === "across") {
-      cell.across = true
-    } else {
-      cell.down = true
-    }
-  })
-}
-
-function hasLetter(board: BoardCell[][], row: number, col: number) {
-  return Boolean(board[row]?.[col]?.letter)
 }
 
 function buildScheduledPuzzle(

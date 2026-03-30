@@ -32,6 +32,7 @@ export type SeedWord = {
 }
 
 export const FIXED_GRID_SIZES = [7, 9, 11] as const
+export const MAX_GRID_SIZE = FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
 
 const MIN_WORD_LENGTH = 3
 const MIN_FILL_RATE = 0.7
@@ -380,26 +381,38 @@ export function createPuzzleId(title: string, date: string) {
 
 export function recommendGridSize(words: SeedWord[]): GridRecommendation {
   const normalizedWords = normalizeSeedWords(words)
-  const totalLetters = normalizedWords.reduce(
-    (sum, word) => sum + word.answer.length,
-    0
-  )
-  const longestWord = Math.max(
-    ...normalizedWords.map((word) => word.answer.length),
-    0
-  )
-  const estimatedSide = Math.ceil(Math.sqrt(Math.max(totalLetters * 1.9, 16)))
-  const baseSide = Math.max(longestWord + 2, estimatedSide, 7)
-  const side = pickFixedGridSize(baseSide % 2 === 0 ? baseSide + 1 : baseSide)
+  const bestFit = pickBestGridFit(normalizedWords)
 
   return {
-    rows: side,
-    cols: side,
+    rows: bestFit.size,
+    cols: bestFit.size,
     label:
       normalizedWords.length === 0
         ? "Add a few words and I will recommend a grid size."
-        : `Try ${side}x${side}. It fits the longest word (${longestWord}) and gives ${normalizedWords.length} answers enough crossing room.`,
+        : bestFit.unplacedCount === 0
+          ? `Try ${bestFit.size}x${bestFit.size}. It is the most compact grid that fits all ${normalizedWords.length} answers.`
+          : `Try ${bestFit.size}x${bestFit.size}. It places ${bestFit.placedCount} of ${normalizedWords.length} answers in the most compact grid available.`,
   }
+}
+
+export function generateCompactDraftFromWordList({
+  words,
+  title = "",
+  date = getLocalDateKey(),
+}: {
+  words: SeedWord[]
+  title?: string
+  date?: string
+}): GeneratedDraftResult {
+  const recommendation = recommendGridSize(words)
+
+  return generateDraftFromWordList({
+    words,
+    rows: recommendation.rows,
+    cols: recommendation.cols,
+    title,
+    date,
+  })
 }
 
 export function generateDraftFromWordList({
@@ -417,12 +430,38 @@ export function generateDraftFromWordList({
 }): GeneratedDraftResult {
   const normalizedWords = normalizeSeedWords(words)
   const recommendation = recommendGridSize(normalizedWords)
+
+  return generateDraftWithPlacement({
+    words: normalizedWords,
+    rows,
+    cols,
+    title,
+    date,
+    recommendation,
+  })
+}
+
+function generateDraftWithPlacement({
+  words,
+  rows,
+  cols,
+  title = "",
+  date = getLocalDateKey(),
+  recommendation,
+}: {
+  words: SeedWord[]
+  rows: number
+  cols: number
+  title?: string
+  date?: string
+  recommendation: GridRecommendation
+}): GeneratedDraftResult {
   const draft = createBlockedDraft(rows, cols, title, date)
   const maxWordLength = getMaxWordLengthForGrid(Math.max(rows, cols))
-  const eligibleWords = normalizedWords.filter(
+  const eligibleWords = words.filter(
     (word) => word.answer.length <= maxWordLength
   )
-  const oversizedWords = normalizedWords.filter(
+  const oversizedWords = words.filter(
     (word) => word.answer.length > maxWordLength
   )
 
@@ -449,7 +488,7 @@ export function generateDraftFromWordList({
     return {
       draft,
       placedWords: [],
-      unplacedWords: normalizedWords,
+      unplacedWords: words,
       recommendation,
     }
   }
@@ -652,18 +691,42 @@ function normalizeSeedWords(words: SeedWord[]) {
     .filter((word) => word.answer.length >= MIN_WORD_LENGTH)
 }
 
-function clampGridSize(value: number) {
-  return Math.max(
-    FIXED_GRID_SIZES[0],
-    Math.min(FIXED_GRID_SIZES.at(-1) ?? 11, value)
-  )
+type GridFit = {
+  size: number
+  placedCount: number
+  unplacedCount: number
 }
 
-function pickFixedGridSize(value: number) {
-  const target = clampGridSize(value)
+function pickBestGridFit(words: SeedWord[]): GridFit {
+  const fits = FIXED_GRID_SIZES.map((size) => {
+    const result = generateDraftWithPlacement({
+      words,
+      rows: size,
+      cols: size,
+      title: "",
+      date: getLocalDateKey(),
+      recommendation: {
+        rows: size,
+        cols: size,
+        label: "",
+      },
+    })
+
+    return {
+      size,
+      placedCount: result.placedWords.length,
+      unplacedCount: result.unplacedWords.length,
+    }
+  })
+
   return (
-    FIXED_GRID_SIZES.find((size) => size >= target) ??
-    FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
+    fits.find((fit) => fit.unplacedCount === 0) ??
+    [...fits].sort(
+      (left, right) =>
+        right.placedCount - left.placedCount ||
+        left.unplacedCount - right.unplacedCount ||
+        left.size - right.size
+    )[0]
   )
 }
 
@@ -675,15 +738,7 @@ function gridUsesFixedSquareSize(draft: CrosswordDraft) {
 }
 
 function getMaxWordLengthForGrid(size: number) {
-  if (size <= 7) {
-    return 7
-  }
-
-  if (size <= 9) {
-    return 8
-  }
-
-  return 9
+  return Math.max(MIN_WORD_LENGTH, Math.min(size, MAX_GRID_SIZE))
 }
 
 function countDuplicateAnswers(words: DerivedWord[]) {
