@@ -50,6 +50,11 @@ export type GeneratedDraftResult = {
   recommendation: GridRecommendation
 }
 
+export type WordPlacementPreview = {
+  status: "neutral" | "connected" | "separate" | "blocked"
+  connectedWordCount: number
+}
+
 export type ValidationCheck = {
   label: string
   passed: boolean
@@ -441,6 +446,89 @@ export function generateDraftFromWordList({
   })
 }
 
+export function previewWordPlacement({
+  words,
+  answer,
+}: {
+  words: SeedWord[]
+  answer: string
+}): WordPlacementPreview {
+  const normalizedAnswer = normalizeSeedWordAnswer(answer)
+
+  if (normalizedAnswer.length < 2) {
+    return {
+      status: "neutral",
+      connectedWordCount: 0,
+    }
+  }
+
+  if (words.length === 0) {
+    return {
+      status: "connected",
+      connectedWordCount: 0,
+    }
+  }
+
+  const normalizedWords = normalizeSeedWords(words)
+
+  if (normalizedWords.length === 0) {
+    return {
+      status: "connected",
+      connectedWordCount: 0,
+    }
+  }
+
+  const recommendation = recommendGridSize(normalizedWords)
+  const placementRun = runPlacementSimulation({
+    words: normalizedWords,
+    rows: recommendation.rows,
+    cols: recommendation.cols,
+  })
+
+  if (placementRun.placements.length === 0) {
+    return {
+      status: "connected",
+      connectedWordCount: 0,
+    }
+  }
+
+  const candidateWord = { answer: normalizedAnswer, clue: "" }
+  const connectedPlacement = findBestPlacement(
+    placementRun.board,
+    candidateWord,
+    recommendation.rows,
+    recommendation.cols
+  )
+
+  if (connectedPlacement) {
+    return {
+      status: "connected",
+      connectedWordCount: countIntersectedWords(
+        placementRun.placements,
+        connectedPlacement,
+        candidateWord.answer
+      ),
+    }
+  }
+
+  const standalonePlacement = findStandalonePlacement(
+    placementRun.board,
+    candidateWord,
+    recommendation.rows,
+    recommendation.cols
+  )
+
+  return standalonePlacement
+    ? {
+        status: "separate",
+        connectedWordCount: 0,
+      }
+    : {
+        status: "blocked",
+        connectedWordCount: 0,
+      }
+}
+
 function generateDraftWithPlacement({
   words,
   rows,
@@ -457,56 +545,20 @@ function generateDraftWithPlacement({
   recommendation: GridRecommendation
 }): GeneratedDraftResult {
   const draft = createBlockedDraft(rows, cols, title, date)
-  const maxWordLength = getMaxWordLengthForGrid(Math.max(rows, cols))
-  const eligibleWords = words.filter(
-    (word) => word.answer.length <= maxWordLength
-  )
-  const oversizedWords = words.filter(
-    (word) => word.answer.length > maxWordLength
-  )
-
-  if (eligibleWords.length === 0) {
-    return {
-      draft,
-      placedWords: [],
-      unplacedWords: oversizedWords,
-      recommendation,
-    }
-  }
-
-  const board = createPlacementBoard(rows, cols)
-  const sortedWords = [...eligibleWords].sort(
-    (left, right) => right.answer.length - left.answer.length
-  )
-  const placements: Array<Placement & { word: SeedWord }> = []
-  const unplacedWords: SeedWord[] = [...oversizedWords]
-
-  const firstWord = sortedWords[0]
-  const firstPlacement = createFirstPlacement(firstWord, rows, cols)
-
-  if (!firstPlacement) {
-    return {
-      draft,
-      placedWords: [],
-      unplacedWords: words,
-      recommendation,
-    }
-  }
-
-  applyPlacement(board, firstPlacement, firstWord)
-  placements.push({ ...firstPlacement, word: firstWord })
-
-  sortedWords.slice(1).forEach((word) => {
-    const candidate = findBestPlacement(board, word, rows, cols)
-
-    if (!candidate) {
-      unplacedWords.push(word)
-      return
-    }
-
-    applyPlacement(board, candidate, word)
-    placements.push({ ...candidate, word })
+  const { board, placements, unplacedWords } = runPlacementSimulation({
+    words,
+    rows,
+    cols,
   })
+
+  if (placements.length === 0) {
+    return {
+      draft,
+      placedWords: [],
+      unplacedWords,
+      recommendation,
+    }
+  }
 
   fillDraftFromBoard(draft, board)
 
@@ -531,6 +583,70 @@ function generateDraftWithPlacement({
     placedWords: placements.map(({ word }) => word),
     unplacedWords,
     recommendation,
+  }
+}
+
+function runPlacementSimulation({
+  words,
+  rows,
+  cols,
+}: {
+  words: SeedWord[]
+  rows: number
+  cols: number
+}) {
+  const maxWordLength = getMaxWordLengthForGrid(Math.max(rows, cols))
+  const eligibleWords = words.filter(
+    (word) => word.answer.length <= maxWordLength
+  )
+  const oversizedWords = words.filter(
+    (word) => word.answer.length > maxWordLength
+  )
+  const board = createPlacementBoard(rows, cols)
+  const placements: Array<Placement & { word: SeedWord }> = []
+
+  if (eligibleWords.length === 0) {
+    return {
+      board,
+      placements,
+      unplacedWords: oversizedWords,
+    }
+  }
+
+  const sortedWords = [...eligibleWords].sort(
+    (left, right) => right.answer.length - left.answer.length
+  )
+  const unplacedWords: SeedWord[] = [...oversizedWords]
+  const firstWord = sortedWords[0]
+  const firstPlacement = createFirstPlacement(firstWord, rows, cols)
+
+  if (!firstPlacement) {
+    return {
+      board,
+      placements,
+      unplacedWords: words,
+    }
+  }
+
+  applyPlacement(board, firstPlacement, firstWord)
+  placements.push({ ...firstPlacement, word: firstWord })
+
+  sortedWords.slice(1).forEach((word) => {
+    const candidate = findBestPlacement(board, word, rows, cols)
+
+    if (!candidate) {
+      unplacedWords.push(word)
+      return
+    }
+
+    applyPlacement(board, candidate, word)
+    placements.push({ ...candidate, word })
+  })
+
+  return {
+    board,
+    placements,
+    unplacedWords,
   }
 }
 
@@ -666,6 +782,13 @@ function normalizeClue(clue: string) {
   return clue.trim()
 }
 
+function normalizeSeedWordAnswer(answer: string) {
+  return answer
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+}
+
 type PlacementBoardCell = {
   letter: string
   across: boolean
@@ -682,10 +805,7 @@ type Placement = {
 function normalizeSeedWords(words: SeedWord[]) {
   return words
     .map((word) => ({
-      answer: word.answer
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z]/g, ""),
+      answer: normalizeSeedWordAnswer(word.answer),
       clue: word.clue?.trim() ?? "",
     }))
     .filter((word) => word.answer.length >= MIN_WORD_LENGTH)
@@ -955,6 +1075,45 @@ function findBestPlacement(
   )
 }
 
+function findStandalonePlacement(
+  board: PlacementBoardCell[][],
+  word: SeedWord,
+  rows: number,
+  cols: number
+) {
+  const candidates: Placement[] = []
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      ;(["across", "down"] as const).forEach((direction) => {
+        const intersections = countPlacementFit(
+          board,
+          row,
+          col,
+          direction,
+          word.answer,
+          rows,
+          cols,
+          true
+        )
+
+        if (intersections !== 0) {
+          return
+        }
+
+        candidates.push({ row, col, direction, intersections: 0 })
+      })
+    }
+  }
+
+  return (
+    candidates.sort(
+      (left, right) =>
+        scorePlacement(right, rows, cols) - scorePlacement(left, rows, cols)
+    )[0] ?? null
+  )
+}
+
 function countPlacementIntersections(
   board: PlacementBoardCell[][],
   startRow: number,
@@ -963,6 +1122,28 @@ function countPlacementIntersections(
   answer: string,
   rows: number,
   cols: number
+) {
+  return countPlacementFit(
+    board,
+    startRow,
+    startCol,
+    direction,
+    answer,
+    rows,
+    cols,
+    false
+  )
+}
+
+function countPlacementFit(
+  board: PlacementBoardCell[][],
+  startRow: number,
+  startCol: number,
+  direction: Direction,
+  answer: string,
+  rows: number,
+  cols: number,
+  allowStandalone: boolean
 ) {
   const lastRow = startRow + (direction === "down" ? answer.length - 1 : 0)
   const lastCol = startCol + (direction === "across" ? answer.length - 1 : 0)
@@ -1025,7 +1206,7 @@ function countPlacementIntersections(
     }
   }
 
-  return intersections > 0 ? intersections : -1
+  return intersections > 0 || allowStandalone ? intersections : -1
 }
 
 function applyPlacement(
@@ -1048,6 +1229,42 @@ function applyPlacement(
 
 function hasLetter(board: PlacementBoardCell[][], row: number, col: number) {
   return Boolean(board[row]?.[col]?.letter)
+}
+
+function countIntersectedWords(
+  placements: Array<Placement & { word: SeedWord }>,
+  candidate: Placement,
+  answer: string
+) {
+  const occupiedCells = new Set<string>()
+
+  answer.split("").forEach((_, index) => {
+    occupiedCells.add(
+      keyFor(
+        candidate.row + (candidate.direction === "down" ? index : 0),
+        candidate.col + (candidate.direction === "across" ? index : 0)
+      )
+    )
+  })
+
+  return placements.reduce((total, placement) => {
+    if (placement.direction === candidate.direction) {
+      return total
+    }
+
+    const intersects = placement.word.answer
+      .split("")
+      .some((_, index) =>
+        occupiedCells.has(
+          keyFor(
+            placement.row + (placement.direction === "down" ? index : 0),
+            placement.col + (placement.direction === "across" ? index : 0)
+          )
+        )
+      )
+
+    return intersects ? total + 1 : total
+  }, 0)
 }
 
 function scorePlacement(placement: Placement, rows: number, cols: number) {

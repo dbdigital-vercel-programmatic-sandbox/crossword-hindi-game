@@ -1,7 +1,13 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import { Plus, Trash2 } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import {
+  CheckCircle2,
+  CircleX,
+  Plus,
+  TriangleAlert,
+  Trash2,
+} from "lucide-react"
 
 import {
   Dialog,
@@ -17,6 +23,7 @@ import {
   FIXED_GRID_SIZES,
   generateCompactDraftFromWordList,
   keyFor,
+  previewWordPlacement,
   type CrosswordDraft,
 } from "@/lib/crossword-editor"
 import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
@@ -54,6 +61,11 @@ type LayoutResult = {
   recommendationLabel: string
 }
 
+type WordCompatibilityStatus = {
+  tone: "neutral" | "green" | "yellow" | "red"
+  message: string
+}
+
 let nextWordId = 1
 const MAX_GRID_SIZE = FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
 
@@ -81,6 +93,11 @@ export function CrosswordCms({
   const [selectedLoadDate, setSelectedLoadDate] = useState(
     initialPuzzles.at(-1)?.date ?? ""
   )
+  const [wordCompatibility, setWordCompatibility] =
+    useState<WordCompatibilityStatus>({
+      tone: "neutral",
+      message: "",
+    })
 
   const layout = useMemo(
     () => buildCrosswordLayout(words, title, scheduledDate),
@@ -94,6 +111,28 @@ export function CrosswordCms({
     [puzzles]
   )
   const hasScheduledDate = scheduledDates.includes(scheduledDate)
+  const clueIsEnabled =
+    wordCompatibility.tone === "green" || wordCompatibility.tone === "yellow"
+
+  useEffect(() => {
+    const answer = normalizeAnswer(form.word)
+
+    if (answer.length < 2) {
+      setWordCompatibility({ tone: "neutral", message: "" })
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setWordCompatibility(
+        buildWordCompatibilityStatus(
+          previewWordPlacement({ words, answer }),
+          words.length === 0
+        )
+      )
+    }, 300)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [form.word, words])
 
   function handleAddWord(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -110,6 +149,11 @@ export function CrosswordCms({
       setError(
         `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
       )
+      return
+    }
+
+    if (previewWordPlacement({ words, answer }).status === "blocked") {
+      setError("Word doesn't fit with current layout")
       return
     }
 
@@ -316,6 +360,28 @@ export function CrosswordCms({
                         placeholder="MARKET"
                         className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 uppercase transition outline-none focus:border-[#8f7f5b]"
                       />
+
+                      {wordCompatibility.tone !== "neutral" ? (
+                        <div
+                          aria-live="polite"
+                          className={
+                            wordCompatibility.tone === "green"
+                              ? "inline-flex items-center gap-2 rounded-full bg-[#e8f3e3] px-3 py-1.5 text-xs font-medium text-[#305235]"
+                              : wordCompatibility.tone === "yellow"
+                                ? "inline-flex items-center gap-2 rounded-full bg-[#fff4da] px-3 py-1.5 text-xs font-medium text-[#8a6420]"
+                                : "inline-flex items-center gap-2 rounded-full bg-[#fde8e1] px-3 py-1.5 text-xs font-medium text-[#9b4a34]"
+                          }
+                        >
+                          {wordCompatibility.tone === "green" ? (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          ) : wordCompatibility.tone === "yellow" ? (
+                            <TriangleAlert className="h-3.5 w-3.5" />
+                          ) : (
+                            <CircleX className="h-3.5 w-3.5" />
+                          )}
+                          <span>{wordCompatibility.message}</span>
+                        </div>
+                      ) : null}
                     </label>
 
                     <label className="grid gap-2 text-sm">
@@ -325,14 +391,19 @@ export function CrosswordCms({
                       <textarea
                         rows={3}
                         value={form.clue}
+                        disabled={!clueIsEnabled}
                         onChange={(event) =>
                           setForm((current) => ({
                             ...current,
                             clue: event.target.value,
                           }))
                         }
-                        placeholder="Weekend bargain stop"
-                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                        placeholder={
+                          clueIsEnabled
+                            ? "Weekend bargain stop"
+                            : "Enter a compatible word to unlock the clue field"
+                        }
+                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b] disabled:cursor-not-allowed disabled:border-[#e8e1d4] disabled:bg-[#f3eee5] disabled:text-[#998f7d]"
                       />
                     </label>
 
@@ -768,6 +839,41 @@ function buildCrosswordLayout(
       clue: word.clue ?? "",
     })),
     recommendationLabel: result.recommendation.label,
+  }
+}
+
+function buildWordCompatibilityStatus(
+  preview: ReturnType<typeof previewWordPlacement>,
+  isFirstWord: boolean
+): WordCompatibilityStatus {
+  if (preview.status === "neutral") {
+    return { tone: "neutral", message: "" }
+  }
+
+  if (preview.status === "connected") {
+    if (isFirstWord) {
+      return {
+        tone: "green",
+        message: "Great! First word always fits",
+      }
+    }
+
+    return {
+      tone: "green",
+      message: `Great! Intersects with ${preview.connectedWordCount} existing word${preview.connectedWordCount === 1 ? "" : "s"}`,
+    }
+  }
+
+  if (preview.status === "separate") {
+    return {
+      tone: "yellow",
+      message: "Will be placed separately (no intersections found)",
+    }
+  }
+
+  return {
+    tone: "red",
+    message: "Word doesn't fit with current layout",
   }
 }
 
