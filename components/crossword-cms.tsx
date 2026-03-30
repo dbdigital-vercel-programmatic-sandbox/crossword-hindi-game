@@ -24,6 +24,7 @@ import {
   generateCompactDraftFromWordList,
   keyFor,
   previewWordPlacement,
+  suggestBonusWord,
   type CrosswordDraft,
 } from "@/lib/crossword-editor"
 import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
@@ -57,13 +58,14 @@ type LayoutResult = {
   cells: GridCell[][]
   across: ClueItem[]
   down: ClueItem[]
-  unplaced: BuilderWord[]
+  unplaced: Array<BuilderWord & { bonusWord: string | null }>
   recommendationLabel: string
 }
 
 type WordCompatibilityStatus = {
   tone: "neutral" | "green" | "yellow" | "red"
   message: string
+  bonusWord: string | null
 }
 
 let nextWordId = 1
@@ -97,6 +99,7 @@ export function CrosswordCms({
     useState<WordCompatibilityStatus>({
       tone: "neutral",
       message: "",
+      bonusWord: null,
     })
 
   const layout = useMemo(
@@ -118,15 +121,22 @@ export function CrosswordCms({
     const answer = normalizeAnswer(form.word)
 
     if (answer.length < 2) {
-      setWordCompatibility({ tone: "neutral", message: "" })
+      setWordCompatibility({ tone: "neutral", message: "", bonusWord: null })
       return
     }
 
     const timeoutId = window.setTimeout(() => {
+      const preview = previewWordPlacement({ words, answer })
+      const bonusSuggestion =
+        preview.status === "blocked"
+          ? suggestBonusWord({ words, answer })
+          : null
+
       setWordCompatibility(
         buildWordCompatibilityStatus(
-          previewWordPlacement({ words, answer }),
-          words.length === 0
+          preview,
+          words.length === 0,
+          bonusSuggestion
         )
       )
     }, 300)
@@ -152,8 +162,16 @@ export function CrosswordCms({
       return
     }
 
-    if (previewWordPlacement({ words, answer }).status === "blocked") {
-      setError("Word doesn't fit with current layout")
+    const preview = previewWordPlacement({ words, answer })
+
+    if (preview.status === "blocked") {
+      const bonusSuggestion = suggestBonusWord({ words, answer })
+
+      setError(
+        bonusSuggestion
+          ? `Word doesn't fit with current layout. Try adding ${bonusSuggestion.answer} first.`
+          : "Word doesn't fit with current layout"
+      )
       return
     }
 
@@ -362,24 +380,36 @@ export function CrosswordCms({
                       />
 
                       {wordCompatibility.tone !== "neutral" ? (
-                        <div
-                          aria-live="polite"
-                          className={
-                            wordCompatibility.tone === "green"
-                              ? "inline-flex items-center gap-2 rounded-full bg-[#e8f3e3] px-3 py-1.5 text-xs font-medium text-[#305235]"
-                              : wordCompatibility.tone === "yellow"
-                                ? "inline-flex items-center gap-2 rounded-full bg-[#fff4da] px-3 py-1.5 text-xs font-medium text-[#8a6420]"
-                                : "inline-flex items-center gap-2 rounded-full bg-[#fde8e1] px-3 py-1.5 text-xs font-medium text-[#9b4a34]"
-                          }
-                        >
-                          {wordCompatibility.tone === "green" ? (
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                          ) : wordCompatibility.tone === "yellow" ? (
-                            <TriangleAlert className="h-3.5 w-3.5" />
-                          ) : (
-                            <CircleX className="h-3.5 w-3.5" />
-                          )}
-                          <span>{wordCompatibility.message}</span>
+                        <div className="space-y-2" aria-live="polite">
+                          <div
+                            className={
+                              wordCompatibility.tone === "green"
+                                ? "inline-flex items-center gap-2 rounded-full bg-[#e8f3e3] px-3 py-1.5 text-xs font-medium text-[#305235]"
+                                : wordCompatibility.tone === "yellow"
+                                  ? "inline-flex items-center gap-2 rounded-full bg-[#fff4da] px-3 py-1.5 text-xs font-medium text-[#8a6420]"
+                                  : "inline-flex items-center gap-2 rounded-full bg-[#fde8e1] px-3 py-1.5 text-xs font-medium text-[#9b4a34]"
+                            }
+                          >
+                            {wordCompatibility.tone === "green" ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            ) : wordCompatibility.tone === "yellow" ? (
+                              <TriangleAlert className="h-3.5 w-3.5" />
+                            ) : (
+                              <CircleX className="h-3.5 w-3.5" />
+                            )}
+                            <span>{wordCompatibility.message}</span>
+                          </div>
+
+                          {wordCompatibility.bonusWord ? (
+                            <div className="rounded-2xl border border-[#eedbcc] bg-[#fcf5ee] px-3 py-2 text-xs leading-5 text-[#7d5239]">
+                              Bonus word suggestion:{" "}
+                              <span className="font-semibold tracking-[0.08em] uppercase">
+                                {wordCompatibility.bonusWord}
+                              </span>
+                              . Add it first to keep the current words and
+                              create a new crossing path.
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                     </label>
@@ -587,6 +617,23 @@ export function CrosswordCms({
                 <div className="mt-4 rounded-2xl border border-[#e2c8b7] bg-[#fff5ef] px-4 py-3 text-sm text-[#91563a]">
                   Could not place:{" "}
                   {layout.unplaced.map((word) => word.answer).join(", ")}
+                  <div className="mt-3 space-y-2 text-xs leading-5 text-[#7d5239]">
+                    {layout.unplaced.map((word) =>
+                      word.bonusWord ? (
+                        <div key={`${word.id}-bonus`}>
+                          Add bonus word{" "}
+                          <span className="font-semibold tracking-[0.08em] uppercase">
+                            {word.bonusWord}
+                          </span>{" "}
+                          to help fit{" "}
+                          <span className="font-semibold tracking-[0.08em] uppercase">
+                            {word.answer}
+                          </span>{" "}
+                          without dropping the current set.
+                        </div>
+                      ) : null
+                    )}
+                  </div>
                 </div>
               ) : null}
 
@@ -837,6 +884,15 @@ function buildCrosswordLayout(
       id: `unplaced-${index}-${word.answer}`,
       answer: word.answer,
       clue: word.clue ?? "",
+      bonusWord:
+        suggestBonusWord({
+          words: words.map((item) => ({
+            answer: item.answer,
+            clue: item.clue,
+          })),
+          answer: word.answer,
+          targetAlreadyIncluded: true,
+        })?.answer ?? null,
     })),
     recommendationLabel: result.recommendation.label,
   }
@@ -844,10 +900,11 @@ function buildCrosswordLayout(
 
 function buildWordCompatibilityStatus(
   preview: ReturnType<typeof previewWordPlacement>,
-  isFirstWord: boolean
+  isFirstWord: boolean,
+  bonusSuggestion: ReturnType<typeof suggestBonusWord>
 ): WordCompatibilityStatus {
   if (preview.status === "neutral") {
-    return { tone: "neutral", message: "" }
+    return { tone: "neutral", message: "", bonusWord: null }
   }
 
   if (preview.status === "connected") {
@@ -855,12 +912,14 @@ function buildWordCompatibilityStatus(
       return {
         tone: "green",
         message: "Great! First word always fits",
+        bonusWord: null,
       }
     }
 
     return {
       tone: "green",
       message: `Great! Intersects with ${preview.connectedWordCount} existing word${preview.connectedWordCount === 1 ? "" : "s"}`,
+      bonusWord: null,
     }
   }
 
@@ -868,12 +927,14 @@ function buildWordCompatibilityStatus(
     return {
       tone: "yellow",
       message: "Will be placed separately (no intersections found)",
+      bonusWord: null,
     }
   }
 
   return {
     tone: "red",
     message: "Word doesn't fit with current layout",
+    bonusWord: bonusSuggestion?.answer ?? null,
   }
 }
 

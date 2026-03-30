@@ -55,6 +55,10 @@ export type WordPlacementPreview = {
   connectedWordCount: number
 }
 
+export type BonusWordSuggestion = {
+  answer: string
+}
+
 export type ValidationCheck = {
   label: string
   passed: boolean
@@ -529,6 +533,66 @@ export function previewWordPlacement({
       }
 }
 
+export function suggestBonusWord({
+  words,
+  answer,
+  targetAlreadyIncluded = false,
+}: {
+  words: SeedWord[]
+  answer: string
+  targetAlreadyIncluded?: boolean
+}): BonusWordSuggestion | null {
+  const normalizedAnswer = normalizeSeedWordAnswer(answer)
+
+  if (normalizedAnswer.length < MIN_WORD_LENGTH) {
+    return null
+  }
+
+  const normalizedWords = normalizeSeedWords(words)
+
+  if (normalizedWords.length === 0) {
+    return null
+  }
+
+  const existingAnswers = new Set(normalizedWords.map((word) => word.answer))
+  const seedWords = targetAlreadyIncluded
+    ? normalizedWords
+    : [...normalizedWords, { answer: normalizedAnswer, clue: "" }]
+  const expectedPlacedCount = seedWords.length + 1
+  const preferredExistingLetters = rankLettersByFrequency(
+    normalizedWords.map((word) => word.answer)
+  )
+  const preferredTargetLetters = rankLettersByFrequency([normalizedAnswer])
+  const candidateWords = buildBonusWordCandidates(
+    preferredExistingLetters,
+    preferredTargetLetters
+  )
+
+  for (const candidateAnswer of candidateWords) {
+    if (
+      candidateAnswer.length < MIN_WORD_LENGTH ||
+      candidateAnswer.length > MAX_GRID_SIZE ||
+      existingAnswers.has(candidateAnswer) ||
+      candidateAnswer === normalizedAnswer
+    ) {
+      continue
+    }
+
+    const result = generateCompactDraftFromWordList({
+      words: [...seedWords, { answer: candidateAnswer, clue: "" }],
+    })
+
+    if (
+      result.unplacedWords.length === 0 &&
+      result.placedWords.length === expectedPlacedCount
+    ) {
+      return { answer: candidateAnswer }
+    }
+  }
+
+  return null
+}
+
 function generateDraftWithPlacement({
   words,
   rows,
@@ -809,6 +873,56 @@ function normalizeSeedWords(words: SeedWord[]) {
       clue: word.clue?.trim() ?? "",
     }))
     .filter((word) => word.answer.length >= MIN_WORD_LENGTH)
+}
+
+function rankLettersByFrequency(words: string[]) {
+  const counts = new Map<string, number>()
+
+  words.forEach((word) => {
+    new Set(word.split("")).forEach((letter) => {
+      counts.set(letter, (counts.get(letter) ?? 0) + 1)
+    })
+  })
+
+  return [...counts.entries()]
+    .sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0])
+    )
+    .map(([letter]) => letter)
+}
+
+function buildBonusWordCandidates(
+  existingLetters: string[],
+  targetLetters: string[]
+) {
+  const candidates = new Set<string>()
+  const existingPool = existingLetters.slice(0, 6)
+  const targetPool = targetLetters.slice(0, 6)
+
+  existingPool.forEach((existingLetter, existingIndex) => {
+    targetPool.forEach((targetLetter, targetIndex) => {
+      const nextExisting =
+        existingPool[(existingIndex + 1) % existingPool.length] ??
+        existingLetter
+      const nextTarget =
+        targetPool[(targetIndex + 1) % targetPool.length] ?? targetLetter
+
+      ;[
+        `${existingLetter}${targetLetter}${existingLetter}`,
+        `${targetLetter}${existingLetter}${targetLetter}`,
+        `${existingLetter}${targetLetter}${nextTarget}`,
+        `${targetLetter}${existingLetter}${nextExisting}`,
+        `${existingLetter}${targetLetter}${existingLetter}${targetLetter}`,
+        `${targetLetter}${existingLetter}${targetLetter}${existingLetter}`,
+      ].forEach((candidate) => {
+        if (new Set(candidate.split("")).size >= 2) {
+          candidates.add(candidate)
+        }
+      })
+    })
+  })
+
+  return [...candidates]
 }
 
 type GridFit = {
