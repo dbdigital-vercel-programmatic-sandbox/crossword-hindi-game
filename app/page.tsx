@@ -829,7 +829,12 @@ export default function Page() {
         </div>
 
         <section className="flex min-h-0 w-full flex-1 flex-col items-center justify-center self-stretch">
-          <div className="grid w-full grid-cols-8 gap-[3.92px]">
+          <div
+            className="mx-auto grid w-full max-w-[390px] gap-[3.92px]"
+            style={{
+              gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`,
+            }}
+          >
             {Array.from({ length: GRID_ROWS * GRID_COLS }, (_, index) => {
               const row = Math.floor(index / GRID_COLS)
               const col = index % GRID_COLS

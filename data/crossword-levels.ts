@@ -6,7 +6,7 @@ export const crosswordLevels: CrosswordPuzzle[] = [
     date: "2026-03-18",
     title: "Level 2",
     rows: 9,
-    cols: 8,
+    cols: 9,
     givenCells: [
       "0-2",
       "0-3",

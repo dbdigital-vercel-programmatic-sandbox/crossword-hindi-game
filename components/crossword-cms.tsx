@@ -67,6 +67,7 @@ type CandidatePlacement = {
 }
 
 let nextWordId = 1
+const CMS_GRID_SIZE = 9
 
 export function CrosswordCms({
   initialPuzzles,
@@ -114,6 +115,13 @@ export function CrosswordCms({
       return
     }
 
+    if (answer.length > CMS_GRID_SIZE) {
+      setError(
+        `Keep answers to ${CMS_GRID_SIZE} letters or fewer for the 9x9 grid.`
+      )
+      return
+    }
+
     if (!clue) {
       setError("Add a clue or hint before saving the word.")
       return
@@ -158,6 +166,13 @@ export function CrosswordCms({
 
     if (layout.placements.length === 0) {
       setError("Add words before scheduling a crossword.")
+      return
+    }
+
+    if (layout.unplaced.length > 0) {
+      setError(
+        "Remove or shorten the words that do not fit the 9x9 grid before publishing."
+      )
       return
     }
 
@@ -239,7 +254,7 @@ export function CrosswordCms({
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-[#5f675f]">
                 Every time you add or remove a word, the builder recomputes a
-                crossword-style layout and renumbers the clue list.
+                fixed 9x9 crossword layout and renumbers the clue list.
               </p>
               <p className="mt-2 text-sm leading-6 text-[#5f675f]">
                 Use Add Word to shape the board, then switch to Publish Puzzle
@@ -508,16 +523,16 @@ export function CrosswordCms({
                 </div>
               ) : null}
 
-              <div className="mt-5 overflow-x-auto">
+              <div className="mt-5 flex justify-center">
                 {layout.cells.length === 0 ? (
                   <div className="flex min-h-[280px] items-center justify-center rounded-[24px] bg-[#f6f3ec] text-sm text-[#6a7268]">
                     The crossword grid appears here after you add words.
                   </div>
                 ) : (
                   <div
-                    className="inline-grid gap-[3px] rounded-[24px] bg-[#2b362c] p-3"
+                    className="grid aspect-square w-full max-w-[540px] gap-[3px] rounded-[24px] bg-[#2b362c] p-3"
                     style={{
-                      gridTemplateColumns: `repeat(${layout.cells[0].length}, minmax(0, 44px))`,
+                      gridTemplateColumns: `repeat(${layout.cells[0].length}, minmax(0, 1fr))`,
                     }}
                   >
                     {layout.cells.flatMap((row, rowIndex) =>
@@ -712,8 +727,7 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
     }
   }
 
-  const boardSize = getBoardSize(words)
-  const board = createBoard(boardSize)
+  const board = createBoard(CMS_GRID_SIZE)
   const sortedWords = [...words].sort(
     (left, right) => right.answer.length - left.answer.length
   )
@@ -721,8 +735,8 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
   const unplaced: BuilderWord[] = []
 
   const firstWord = sortedWords[0]
-  const centerRow = Math.floor(boardSize / 2)
-  const centerCol = Math.floor((boardSize - firstWord.answer.length) / 2)
+  const centerRow = Math.floor(CMS_GRID_SIZE / 2)
+  const centerCol = Math.floor((CMS_GRID_SIZE - firstWord.answer.length) / 2)
 
   applyPlacement(board, {
     ...firstWord,
@@ -760,34 +774,17 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
     placements.push(placement)
   })
 
-  const bounds = getFilledBounds(board)
-  if (!bounds) {
-    return {
-      cells: [],
-      across: [],
-      down: [],
-      unplaced,
-      placements,
-    }
-  }
-
-  const cells: GridCell[][] = []
-  for (let row = bounds.minRow; row <= bounds.maxRow; row += 1) {
-    const nextRow: GridCell[] = []
-    for (let col = bounds.minCol; col <= bounds.maxCol; col += 1) {
-      const cell = board[row][col]
-      nextRow.push({
-        letter: cell.letter,
-        number: null,
-        filled: Boolean(cell.letter),
-      })
-    }
-    cells.push(nextRow)
-  }
+  const cells: GridCell[][] = board.map((row) =>
+    row.map((cell) => ({
+      letter: cell.letter,
+      number: null,
+      filled: Boolean(cell.letter),
+    }))
+  )
 
   let nextNumber = 1
-  for (let row = bounds.minRow; row <= bounds.maxRow; row += 1) {
-    for (let col = bounds.minCol; col <= bounds.maxCol; col += 1) {
+  for (let row = 0; row < CMS_GRID_SIZE; row += 1) {
+    for (let col = 0; col < CMS_GRID_SIZE; col += 1) {
       const starts = placements.filter(
         (placement) => placement.row === row && placement.col === col
       )
@@ -799,7 +796,7 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
       starts.forEach((placement) => {
         placement.number = nextNumber
       })
-      cells[row - bounds.minRow][col - bounds.minCol].number = nextNumber
+      cells[row][col].number = nextNumber
       nextNumber += 1
     }
   }
@@ -814,8 +811,8 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
         number: placement.number,
         clue: placement.clue,
         answer: placement.answer,
-        row: placement.row - bounds.minRow,
-        col: placement.col - bounds.minCol,
+        row: placement.row,
+        col: placement.col,
         direction: placement.direction,
       })),
     down: placements
@@ -826,8 +823,8 @@ function buildCrosswordLayout(words: BuilderWord[]): LayoutResult {
         number: placement.number,
         clue: placement.clue,
         answer: placement.answer,
-        row: placement.row - bounds.minRow,
-        col: placement.col - bounds.minCol,
+        row: placement.row,
+        col: placement.col,
         direction: placement.direction,
       })),
     unplaced,
@@ -869,11 +866,6 @@ function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
       answer: normalizeAnswer(clue.answer),
       clue: clue.clue,
     }))
-}
-
-function getBoardSize(words: BuilderWord[]) {
-  const longest = Math.max(...words.map((word) => word.answer.length), 0)
-  return Math.max(13, Math.min(31, longest * 2 + words.length * 2 + 3))
 }
 
 function findIntersectionPlacement(board: BoardCell[][], word: BuilderWord) {
@@ -1061,32 +1053,6 @@ function applyPlacement(board: BoardCell[][], placement: Placement) {
 
 function hasLetter(board: BoardCell[][], row: number, col: number) {
   return Boolean(board[row]?.[col]?.letter)
-}
-
-function getFilledBounds(board: BoardCell[][]) {
-  let minRow = Number.POSITIVE_INFINITY
-  let maxRow = Number.NEGATIVE_INFINITY
-  let minCol = Number.POSITIVE_INFINITY
-  let maxCol = Number.NEGATIVE_INFINITY
-
-  for (let row = 0; row < board.length; row += 1) {
-    for (let col = 0; col < board[row].length; col += 1) {
-      if (!board[row][col].letter) {
-        continue
-      }
-
-      minRow = Math.min(minRow, row)
-      maxRow = Math.max(maxRow, row)
-      minCol = Math.min(minCol, col)
-      maxCol = Math.max(maxCol, col)
-    }
-  }
-
-  if (!Number.isFinite(minRow)) {
-    return null
-  }
-
-  return { minRow, maxRow, minCol, maxCol }
 }
 
 function buildScheduledPuzzle(
