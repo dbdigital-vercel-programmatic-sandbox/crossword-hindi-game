@@ -3,7 +3,13 @@
     "ports": [
       {
         "port": 3000,
-        "label": "app"
+        "label": "app",
+        "subdirectory": "/"
+      },
+      {
+        "port": 3000,
+        "label": "cms",
+        "subdirectory": "/cms"
       }
     ]
   }
