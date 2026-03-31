@@ -114,8 +114,7 @@ export function CrosswordCms({
     [puzzles]
   )
   const hasScheduledDate = scheduledDates.includes(scheduledDate)
-  const clueIsEnabled =
-    wordCompatibility.tone === "green" || wordCompatibility.tone === "yellow"
+  const clueIsEnabled = normalizeAnswer(form.word).length >= 3
 
   useEffect(() => {
     const answer = normalizeAnswer(form.word)
@@ -158,19 +157,6 @@ export function CrosswordCms({
     if (answer.length > MAX_GRID_SIZE) {
       setError(
         `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
-      )
-      return
-    }
-
-    const preview = previewWordPlacement({ words, answer })
-
-    if (preview.status === "blocked") {
-      const bonusSuggestion = suggestBonusWord({ words, answer })
-
-      setError(
-        bonusSuggestion
-          ? `Word doesn't fit with current layout. Try adding ${bonusSuggestion.answer} first.`
-          : "Word doesn't fit with current layout"
       )
       return
     }
@@ -431,7 +417,7 @@ export function CrosswordCms({
                         placeholder={
                           clueIsEnabled
                             ? "Weekend bargain stop"
-                            : "Enter a compatible word to unlock the clue field"
+                            : "Enter at least 3 letters to unlock the clue field"
                         }
                         className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b] disabled:cursor-not-allowed disabled:border-[#e8e1d4] disabled:bg-[#f3eee5] disabled:text-[#998f7d]"
                       />
@@ -933,7 +919,9 @@ function buildWordCompatibilityStatus(
 
   return {
     tone: "red",
-    message: "Word doesn't fit with current layout",
+    message: bonusSuggestion?.answer
+      ? `Doesn't fit yet. Try ${bonusSuggestion.answer} to bridge the gap.`
+      : "Doesn't fit yet, but you can still add it.",
     bonusWord: bonusSuggestion?.answer ?? null,
   }
 }

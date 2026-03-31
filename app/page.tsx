@@ -1032,17 +1032,15 @@ function KeyButton({
 
 function HomeMascot() {
   return (
-    <div className="h-[100px] w-[100px]">
-      <div className="relative h-full w-full rounded-[20px] bg-[#39d66f] shadow-[inset_0_0_0_4px_rgba(255,255,255,0.25)]">
-        <div className="absolute top-[10px] left-[10px] h-[16px] w-[16px] rounded-full bg-black" />
-        <div className="absolute top-[10px] right-[10px] h-[16px] w-[16px] rounded-full bg-black" />
-        <div className="absolute top-[24px] left-[15px] h-[14px] w-[58px] rounded-[4px] bg-[#ffb899]" />
-        <div className="absolute top-[36px] left-[19px] h-[12px] w-[50px] rounded-[4px] bg-[#fff4eb]" />
-        <div className="absolute top-[49px] left-[37px] h-[18px] w-[18px] rounded-full bg-black" />
-        <div className="absolute bottom-[22px] left-[10px] h-[14px] w-[58px] rounded-[4px] bg-[#ffb899]" />
-        <div className="absolute bottom-[10px] left-[19px] h-[12px] w-[50px] rounded-[4px] bg-[#fff4eb]" />
-      </div>
-    </div>
+    <img
+      src="https://images.bhaskarassets.com/web2images/521/2026/03/frame-2_1774850873.png"
+      alt="CrossWord logo"
+      className="h-[100px] w-[100px] shrink-0 object-contain"
+      width={100}
+      height={100}
+      loading="eager"
+      decoding="async"
+    />
   )
 }
 
