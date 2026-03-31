@@ -579,7 +579,7 @@ export default function Page() {
                     "flex w-full flex-col justify-center self-stretch text-center text-[28px] font-extrabold text-black"
                   )}
                 >
-                  CrossWord
+                  Crossword
                 </div>
               </div>
 
@@ -1034,7 +1034,7 @@ function HomeMascot() {
   return (
     <img
       src="https://images.bhaskarassets.com/web2images/521/2026/03/frame-2_1774850873.png"
-      alt="CrossWord logo"
+      alt="Crossword logo"
       className="h-[100px] w-[100px] shrink-0 object-contain"
       width={100}
       height={100}
