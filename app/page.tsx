@@ -95,6 +95,7 @@ export default function Page() {
       clueCount: puzzle.clues.length,
     }))
   )
+  const [isPuzzleLoading, setIsPuzzleLoading] = useState(true)
   const puzzleModel = useMemo(
     () => buildPuzzleModel(scheduledPuzzle),
     [scheduledPuzzle]
@@ -115,6 +116,15 @@ export default function Page() {
 
   useEffect(() => {
     let isCancelled = false
+    setIsPuzzleLoading(true)
+
+    const fallbackPuzzle = getScheduledPuzzle(crosswordLevels, dateKey)
+    const fallbackSchedule = crosswordLevels.map((puzzle) => ({
+      id: puzzle.id,
+      date: puzzle.date,
+      title: puzzle.title,
+      clueCount: puzzle.clues.length,
+    }))
 
     const loadPuzzle = async () => {
       try {
@@ -122,6 +132,12 @@ export default function Page() {
           cache: "no-store",
         })
         if (!response.ok) {
+          if (isCancelled) {
+            return
+          }
+
+          setScheduledPuzzle(fallbackPuzzle)
+          setSchedule(fallbackSchedule)
           return
         }
 
@@ -141,15 +157,14 @@ export default function Page() {
           return
         }
 
-        setScheduledPuzzle(getScheduledPuzzle(crosswordLevels, dateKey))
-        setSchedule(
-          crosswordLevels.map((puzzle) => ({
-            id: puzzle.id,
-            date: puzzle.date,
-            title: puzzle.title,
-            clueCount: puzzle.clues.length,
-          }))
-        )
+        setScheduledPuzzle(fallbackPuzzle)
+        setSchedule(fallbackSchedule)
+      } finally {
+        if (isCancelled) {
+          return
+        }
+
+        setIsPuzzleLoading(false)
       }
     }
 
@@ -564,6 +579,21 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [cycleClue, handleBackspace, handleLetter, screen])
+
+  if (isPuzzleLoading) {
+    return (
+      <main className="inline-flex h-svh w-full items-center justify-center bg-[#f6f0d7]">
+        <div
+          className={cn(
+            homeBodyFont.className,
+            "text-center text-[16px] leading-[24px] font-medium text-black/70"
+          )}
+        >
+          Loading today&apos;s puzzle...
+        </div>
+      </main>
+    )
+  }
 
   if (screen === "home") {
     return (
