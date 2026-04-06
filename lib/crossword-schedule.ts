@@ -5,6 +5,7 @@ export type ClueDefinition = {
   number: number
   direction: Direction
   clue: string
+  meaning: string
   answer: string
   row: number
   col: number

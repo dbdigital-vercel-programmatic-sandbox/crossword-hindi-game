@@ -1,8 +1,8 @@
 "use client"
 
-import { Inter, Noto_Sans, Roboto } from "next/font/google"
+import { Noto_Sans } from "next/font/google"
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronLeft, ChevronRight, Clock3, Delete, House } from "lucide-react"
+import { ChevronLeft, ChevronRight, X } from "lucide-react"
 
 import { crosswordLevels } from "@/data/crossword-levels"
 import {
@@ -15,15 +15,12 @@ import {
 } from "@/lib/crossword-schedule"
 import { cn } from "@/lib/utils"
 
-const homeTitleFont = Inter({ subsets: ["latin"], weight: ["600", "800"] })
-const homeBodyFont = Roboto({
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-})
 const gameFont = Noto_Sans({
   subsets: ["latin"],
   weight: ["400", "600", "700"],
 })
+const homeTitleFont = gameFont
+const homeBodyFont = gameFont
 
 type LockSource = "given" | "revealed" | "solved"
 type FeedbackType = "wrong" | "correct"
@@ -64,6 +61,11 @@ type FeedbackState = {
   stamp: number
 }
 
+type GameSettings = {
+  isHintsTurnedOff: boolean
+  isWordBlastTurnedOff: boolean
+}
+
 type PuzzleModel = {
   GRID_ROWS: number
   GRID_COLS: number
@@ -81,6 +83,26 @@ const keyboardRows = [
   "ASDFGHJKL".split(""),
   "ZXCVBNM".split(""),
 ]
+
+const dlsAssets = {
+  home: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Home_Outline.svg",
+  pause:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Pause_Outline.svg",
+  hint: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Hint.svg",
+  fire: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Fire.svg",
+  tick: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/TIck.svg",
+  cross:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Cross.svg",
+  emptyCell:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Empty%20Cell.svg",
+  ray: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Ray.svg",
+  backspace:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Backspace_Outline.svg",
+  timer:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Timer_illustration.svg",
+  trophy:
+    "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Trophy.svg",
+} as const
 
 export default function Page() {
   const [dateKey, setDateKey] = useState(() => getLocalDateKey())
@@ -105,6 +127,11 @@ export default function Page() {
 
   const [game, setGame] = useState<GameState>(() => puzzleModel.initialGame)
   const [screen, setScreen] = useState<Screen>("home")
+  const [isPauseOpen, setIsPauseOpen] = useState(false)
+  const [isMeaningSheetOpen, setIsMeaningSheetOpen] = useState(false)
+  const [isHomeSettingsOpen, setIsHomeSettingsOpen] = useState(false)
+  const [isHintsTurnedOff, setIsHintsTurnedOff] = useState(false)
+  const [isWordBlastTurnedOff, setIsWordBlastTurnedOff] = useState(false)
   const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
   const [completionHistory, setCompletionHistory] = useState<
     Record<string, boolean>
@@ -195,6 +222,19 @@ export default function Page() {
   }, [schedule])
 
   useEffect(() => {
+    const storedSettings = loadStoredSettings()
+    setIsHintsTurnedOff(storedSettings.isHintsTurnedOff)
+    setIsWordBlastTurnedOff(storedSettings.isWordBlastTurnedOff)
+  }, [])
+
+  useEffect(() => {
+    storeSettings({
+      isHintsTurnedOff,
+      isWordBlastTurnedOff,
+    })
+  }, [isHintsTurnedOff, isWordBlastTurnedOff])
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => {
       setDateKey(getLocalDateKey())
     }, msUntilNextLocalMidnight())
@@ -226,6 +266,30 @@ export default function Page() {
     () => formatNextChallengeDate(getNextChallengeDateKey(dateKey, schedule)),
     [dateKey, schedule]
   )
+  const todaysWords = useMemo(
+    () =>
+      [...clues]
+        .sort((left, right) => {
+          if (left.number !== right.number) {
+            return left.number - right.number
+          }
+
+          return left.direction.localeCompare(right.direction)
+        })
+        .map((clue) => ({
+          id: clue.id,
+          label: `${clue.number}${clue.direction === "across" ? "A" : "D"}`,
+          answer: clue.answer,
+          meaning: normalizeMeaning(clue.meaning, clue.answer),
+        })),
+    [clues]
+  )
+
+  useEffect(() => {
+    if (screen !== "summary") {
+      setIsMeaningSheetOpen(false)
+    }
+  }, [screen])
 
   const resetCurrentPuzzle = useCallback(() => {
     setGame(puzzleModel.initialGame)
@@ -320,13 +384,18 @@ export default function Page() {
             ? current.completedIds
             : [...current.completedIds, clue.id]
           const frozenLocks = freezeSolvedClue(current.lockSources, clue)
-          const revealOutcome = revealLetters(
-            clues,
-            cellData,
-            nextEntries,
-            frozenLocks,
-            nextState.solvedIds
-          )
+          const revealOutcome = isWordBlastTurnedOff
+            ? {
+                entries: nextEntries,
+                lockSources: frozenLocks,
+              }
+            : revealLetters(
+                clues,
+                cellData,
+                nextEntries,
+                frozenLocks,
+                nextState.solvedIds
+              )
           const nextSolvedIds = getSolvedClueIds(
             clues,
             cellData,
@@ -391,7 +460,7 @@ export default function Page() {
         }
       })
     },
-    [cellData, clueById, clueOrder, clues]
+    [cellData, clueById, clueOrder, clues, isWordBlastTurnedOff]
   )
 
   const handleBackspace = useCallback(() => {
@@ -446,6 +515,92 @@ export default function Page() {
       }
     })
   }, [cellData, clueById, clues])
+
+  const handleHintPowerUp = useCallback(() => {
+    setGame((current) => {
+      const clue = clueById[current.activeClueId]
+      if (
+        isHintsTurnedOff ||
+        current.feedback?.type === "wrong" ||
+        current.solvedIds.includes(clue.id)
+      ) {
+        return current
+      }
+
+      const candidateCells = clue.cells.filter(
+        (cell) => !current.entries[cell.key] && !current.lockSources[cell.key]
+      )
+      if (candidateCells.length === 0) {
+        return current
+      }
+
+      const chosenCell =
+        candidateCells[Math.floor(Math.random() * candidateCells.length)]
+      const nextEntries = {
+        ...current.entries,
+        [chosenCell.key]: cellData[chosenCell.key].solution,
+      }
+      const nextLockSources = {
+        ...current.lockSources,
+        [chosenCell.key]: "revealed" as const,
+      }
+      const nextSolvedIds = getSolvedClueIds(clues, cellData, nextEntries)
+      let nextState: GameState = {
+        ...current,
+        entries: nextEntries,
+        lockSources: nextLockSources,
+        solvedIds: nextSolvedIds,
+        activeIndex: firstEmptyIndex(clue, nextEntries, nextLockSources),
+        feedback: null,
+      }
+
+      if (nextSolvedIds.includes(clue.id)) {
+        const nextClueId = findNextUnsolvedClueId(
+          clueOrder,
+          clue.id,
+          nextSolvedIds
+        )
+
+        if (nextClueId) {
+          nextState = {
+            ...nextState,
+            activeClueId: nextClueId,
+            activeIndex: firstEmptyIndex(
+              clueById[nextClueId],
+              nextEntries,
+              nextLockSources
+            ),
+          }
+        }
+      }
+
+      return nextState
+    })
+  }, [cellData, clueById, clueOrder, clues, isHintsTurnedOff])
+
+  const canUseHint = useMemo(() => {
+    const active = clueById[game.activeClueId]
+    if (
+      isHintsTurnedOff ||
+      !active ||
+      game.feedback?.type === "wrong" ||
+      game.solvedIds.includes(active.id)
+    ) {
+      return false
+    }
+
+    return active.cells.some(
+      (cell) => !game.entries[cell.key] && !game.lockSources[cell.key]
+    )
+  }, [
+    clueById,
+    game.activeClueId,
+    game.entries,
+    game.feedback,
+    game.lockSources,
+    game.solvedIds,
+    isHintsTurnedOff,
+  ])
 
   useEffect(() => {
     if (game.feedback?.type !== "correct") {
@@ -502,7 +657,7 @@ export default function Page() {
   }, [clueById, game.feedback])
 
   useEffect(() => {
-    if (screen !== "game" || isPuzzleComplete) {
+    if (screen !== "game" || isPuzzleComplete || isPauseOpen) {
       return
     }
 
@@ -514,7 +669,13 @@ export default function Page() {
     }, 1000)
 
     return () => window.clearInterval(interval)
-  }, [isPuzzleComplete, screen])
+  }, [isPauseOpen, isPuzzleComplete, screen])
+
+  useEffect(() => {
+    if (screen !== "game") {
+      setIsPauseOpen(false)
+    }
+  }, [screen])
 
   useEffect(() => {
     if (screen === "game" && isPuzzleComplete) {
@@ -546,6 +707,14 @@ export default function Page() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isPauseOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault()
+          setIsPauseOpen(false)
+        }
+        return
+      }
+
       if (event.key.toLowerCase() === "k") {
         event.preventDefault()
         setScreen("summary")
@@ -578,7 +747,7 @@ export default function Page() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [cycleClue, handleBackspace, handleLetter, screen])
+  }, [cycleClue, handleBackspace, handleLetter, isPauseOpen, screen])
 
   if (isPuzzleLoading) {
     return (
@@ -633,24 +802,37 @@ export default function Page() {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setScreen(isPuzzleComplete ? "summary" : "game")}
-              className="inline-flex h-[56px] w-full items-center justify-center gap-[10px] self-stretch rounded-[12px] bg-black px-[73px] py-[12px]"
-            >
-              <span
+            <div className="flex w-full flex-col gap-[8px]">
+              <button
+                type="button"
+                onClick={() => setScreen(isPuzzleComplete ? "summary" : "game")}
+                className="inline-flex h-[56px] w-full items-center justify-center gap-[10px] self-stretch rounded-[12px] bg-black px-[73px] py-[12px]"
+              >
+                <span
+                  className={cn(
+                    homeBodyFont.className,
+                    "flex flex-col justify-center text-center text-[20px] leading-[30px] font-semibold text-white"
+                  )}
+                >
+                  {isPuzzleComplete
+                    ? "View Summary"
+                    : hasProgress
+                      ? "Continue Game"
+                      : "Start Game"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsHomeSettingsOpen(true)}
                 className={cn(
                   homeBodyFont.className,
-                  "flex flex-col justify-center text-center text-[20px] leading-[30px] font-semibold text-white"
+                  "inline-flex h-[44px] w-full items-center justify-center rounded-[12px] border border-black bg-transparent px-[14px] text-[16px] leading-[24px] font-semibold text-black"
                 )}
               >
-                {isPuzzleComplete
-                  ? "View Summary"
-                  : hasProgress
-                    ? "Continue Game"
-                    : "Start Game"}
-              </span>
-            </button>
+                Settings
+              </button>
+            </div>
 
             {(hasProgress || isPuzzleComplete) && (
               <p
@@ -666,6 +848,47 @@ export default function Page() {
             )}
           </div>
         </div>
+
+        {isHomeSettingsOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-[2px]"
+            onClick={() => setIsHomeSettingsOpen(false)}
+          >
+            <div
+              className="flex w-full max-w-[320px] flex-col items-center rounded-[20px] bg-white px-[24px] py-[24px] shadow-[0_20px_60px_0_rgba(0,0,0,0.30)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex w-full items-center justify-between">
+                <h2 className="text-[22px] leading-[32px] font-semibold text-black">
+                  Settings
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setIsHomeSettingsOpen(false)}
+                  className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[8px] border border-black/20"
+                  aria-label="Close settings"
+                >
+                  <X
+                    className="h-[18px] w-[18px] text-black"
+                    strokeWidth={2.25}
+                  />
+                </button>
+              </div>
+              <div className="mt-4 flex w-full flex-col gap-[10px]">
+                <PauseToggleRow
+                  label="Turn off hints"
+                  checked={isHintsTurnedOff}
+                  onChange={setIsHintsTurnedOff}
+                />
+                <PauseToggleRow
+                  label="Turn off word blast"
+                  checked={isWordBlastTurnedOff}
+                  onChange={setIsWordBlastTurnedOff}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     )
   }
@@ -702,15 +925,20 @@ export default function Page() {
                 <div
                   className={cn(
                     homeBodyFont.className,
-                    "text-[18px] leading-[26px] font-extrabold text-[#2B2B2B]"
+                    "text-[18px] leading-[26px] font-extrabold text-black"
                   )}
                 >
                   Total Time
                 </div>
                 <div className="flex items-center justify-start gap-[4px]">
-                  <Clock3
-                    className="h-[24px] w-[24px] text-[#454A4E]"
-                    strokeWidth={2.2}
+                  <img
+                    src={dlsAssets.timer}
+                    alt="Timer"
+                    className="h-[24px] w-[24px]"
+                    width={24}
+                    height={24}
+                    loading="lazy"
+                    decoding="async"
                   />
                   <div
                     className={cn(
@@ -723,12 +951,33 @@ export default function Page() {
                 </div>
               </div>
 
+              <div className="inline-flex w-full items-center justify-between self-stretch rounded-[5px] bg-white p-[10px]">
+                <div
+                  className={cn(
+                    homeBodyFont.className,
+                    "text-[18px] leading-[26px] font-extrabold text-black"
+                  )}
+                >
+                  View Todays Words
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMeaningSheetOpen(true)}
+                  className={cn(
+                    homeBodyFont.className,
+                    "inline-flex h-[36px] items-center justify-center rounded-[8px] border border-black px-[12px] text-[14px] leading-[20px] font-bold text-black"
+                  )}
+                >
+                  View Meaning
+                </button>
+              </div>
+
               <div className="flex w-full flex-col items-center justify-start gap-[12px] self-stretch rounded-[12px] bg-white px-[10px] py-[12px]">
                 <div className="inline-flex w-full items-center justify-between self-stretch overflow-hidden">
                   <div
                     className={cn(
                       homeBodyFont.className,
-                      "text-[18px] leading-[26px] font-extrabold text-[#2B2B2B]"
+                      "text-[18px] leading-[26px] font-extrabold text-black"
                     )}
                   >
                     Weekly Streak
@@ -742,24 +991,45 @@ export default function Page() {
                       key={day.label}
                       className="inline-flex w-[32px] flex-col items-center justify-start"
                     >
-                      <div
-                        className={cn(
-                          "relative h-[24px] w-[24px] overflow-hidden",
-                          day.isToday &&
-                            day.state === "complete" &&
-                            "before:absolute before:-inset-[12px] before:rounded-full before:bg-[radial-gradient(circle,rgba(62,158,62,0.33)_0%,rgba(62,158,62,0)_100%)] before:content-['']"
+                      <div className="relative flex h-[24px] w-[24px] items-center justify-center">
+                        {day.isToday && day.state === "complete" ? (
+                          <>
+                            <img
+                              src={dlsAssets.ray}
+                              alt="Today"
+                              className="absolute -inset-[8px] h-[40px] w-[40px]"
+                              width={40}
+                              height={40}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                            <img
+                              src={dlsAssets.tick}
+                              alt="Completed"
+                              className="relative z-10 h-[20px] w-[20px]"
+                              width={20}
+                              height={20}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          </>
+                        ) : (
+                          <img
+                            src={
+                              day.state === "complete"
+                                ? dlsAssets.tick
+                                : day.state === "missed"
+                                  ? dlsAssets.cross
+                                  : dlsAssets.emptyCell
+                            }
+                            alt={day.state}
+                            className="h-[20px] w-[20px]"
+                            width={20}
+                            height={20}
+                            loading="lazy"
+                            decoding="async"
+                          />
                         )}
-                      >
-                        <div
-                          className={cn(
-                            "absolute top-[2px] left-[2px] h-[20px] w-[20px] rounded-full",
-                            day.state === "complete"
-                              ? "bg-[#3E9E3E]"
-                              : day.state === "missed"
-                                ? "bg-[#F44336]"
-                                : "bg-[#BEBEBE]"
-                          )}
-                        />
                       </div>
                       <div className="inline-flex items-center justify-center gap-[10px] self-stretch p-[4px]">
                         <div
@@ -769,8 +1039,8 @@ export default function Page() {
                             day.isToday
                               ? "text-[#F05C21]"
                               : day.state === "pending"
-                                ? "text-[#808080]"
-                                : "text-[#2B2B2B]"
+                                ? "text-black/50"
+                                : "text-black"
                           )}
                         >
                           {day.label}
@@ -806,9 +1076,14 @@ export default function Page() {
               onClick={() => setScreen("home")}
               className="inline-flex h-[44px] w-full items-center justify-center gap-[8px] self-stretch rounded-[12px] border-2 border-black bg-black px-[73px] py-[14px]"
             >
-              <House
-                className="h-[24px] w-[24px] text-white"
-                strokeWidth={2.4}
+              <img
+                src={dlsAssets.home}
+                alt="Home"
+                className="h-[24px] w-[24px]"
+                width={24}
+                height={24}
+                loading="lazy"
+                decoding="async"
               />
               <span
                 className={cn(
@@ -821,6 +1096,66 @@ export default function Page() {
             </button>
           </div>
         </div>
+
+        {isMeaningSheetOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6 backdrop-blur-[2px]"
+            onClick={() => setIsMeaningSheetOpen(false)}
+          >
+            <div
+              className="w-full max-w-[390px] rounded-[16px] bg-white p-[14px] shadow-[0_20px_60px_rgba(0,0,0,0.3)]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-black/10 pb-[10px]">
+                <h2
+                  className={cn(
+                    homeBodyFont.className,
+                    "text-[18px] leading-[26px] font-extrabold text-black"
+                  )}
+                >
+                  Todays Words
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setIsMeaningSheetOpen(false)}
+                  className="inline-flex h-[32px] w-[32px] items-center justify-center rounded-[8px] border border-black/20"
+                  aria-label="Close meanings"
+                >
+                  <X
+                    className="h-[18px] w-[18px] text-black"
+                    strokeWidth={2.25}
+                  />
+                </button>
+              </div>
+
+              <div className="mt-[12px] max-h-[55svh] space-y-[8px] overflow-y-auto pr-[2px]">
+                {todaysWords.map((word) => (
+                  <div
+                    key={word.id}
+                    className="rounded-[10px] border border-black/10 bg-[#FFF9E8] p-[10px]"
+                  >
+                    <div
+                      className={cn(
+                        homeBodyFont.className,
+                        "text-[14px] leading-[20px] font-extrabold text-black"
+                      )}
+                    >
+                      {word.label} - {word.answer}
+                    </div>
+                    <div
+                      className={cn(
+                        homeBodyFont.className,
+                        "mt-[4px] text-[13px] leading-[20px] font-normal text-black/80"
+                      )}
+                    >
+                      {word.meaning}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     )
   }
@@ -829,35 +1164,86 @@ export default function Page() {
     <main
       className={cn(
         gameFont.className,
-        "inline-flex h-svh w-full items-center justify-start gap-[10px] overflow-hidden bg-[#F6F0D7]"
+        "relative inline-flex h-svh w-full items-start justify-start gap-[10px] overflow-hidden bg-[#F6F0D7]"
       )}
     >
-      <div className="mx-auto inline-flex h-full w-full max-w-[430px] flex-1 flex-col items-center justify-start gap-[15px] px-[12px] py-[12px]">
-        <div className="inline-flex w-full items-center justify-start gap-[8px] self-stretch">
-          <button
-            type="button"
-            onClick={() => setScreen("home")}
-            aria-label="Back to home"
-            className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[12px] bg-black p-[8px] text-white"
-          >
-            <ChevronLeft className="h-[24px] w-[24px]" strokeWidth={2.4} />
-          </button>
+      <header className="fixed top-0 right-0 left-0 z-30 w-full bg-transparent">
+        <div className="mx-auto w-full max-w-[430px] px-[12px] pt-[12px]">
+          <div className="grid w-full grid-cols-[40px_1fr_40px] items-center gap-[8px]">
+            <button
+              type="button"
+              onClick={() => setScreen("home")}
+              aria-label="Back to home"
+              className="inline-flex h-[40px] w-[40px] items-center justify-center rounded-[12px] bg-black p-[8px]"
+            >
+              <img
+                src={dlsAssets.home}
+                alt="Home"
+                className="h-[24px] w-[24px]"
+                width={24}
+                height={24}
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
 
-          <div className="flex flex-1 flex-col justify-center text-center text-[18px] leading-[26px] font-semibold text-black">
-            {displayDate}
+            <div className="flex flex-1 flex-col justify-center text-center text-[18px] leading-[26px] font-semibold text-black">
+              {displayDate}
+            </div>
+
+            {isHintsTurnedOff ? (
+              <div className="h-[40px] w-[40px]" aria-hidden="true" />
+            ) : (
+              <button
+                type="button"
+                onClick={handleHintPowerUp}
+                aria-label="Use hint power-up"
+                disabled={!canUseHint}
+                className={cn(
+                  "inline-flex h-[40px] w-[40px] items-center justify-center rounded-[12px] bg-black p-[8px] transition-opacity",
+                  !canUseHint && "cursor-not-allowed opacity-45"
+                )}
+              >
+                <img
+                  src={dlsAssets.hint}
+                  alt="Hint"
+                  className="h-[24px] w-[24px]"
+                  width={24}
+                  height={24}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center justify-center gap-[4px] rounded-[32px] bg-black px-[8px] py-[2px]">
-            <Clock3
-              className="h-[20px] w-[20px] text-white"
-              strokeWidth={2.2}
-            />
-            <div className="text-center text-[16px] leading-[24px] font-semibold text-white">
-              {timerLabel.replace(/^0/, "")}
+          <div className="mt-[8px] flex w-full justify-center">
+            <div className="inline-flex items-center justify-center gap-[6px] rounded-[32px] bg-black px-[8px] py-[2px]">
+              <div className="text-center text-[16px] leading-[24px] font-semibold text-white">
+                {timerLabel.replace(/^0/, "")}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPauseOpen(true)}
+                aria-label="Pause game"
+                className="inline-flex h-[20px] w-[20px] items-center justify-center"
+              >
+                <img
+                  src={dlsAssets.pause}
+                  alt="Pause"
+                  className="h-[20px] w-[20px]"
+                  width={20}
+                  height={20}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </button>
             </div>
           </div>
         </div>
+      </header>
 
+      <div className="mx-auto inline-flex h-full w-full max-w-[430px] flex-1 flex-col items-center justify-start gap-[15px] px-[12px] pt-[106px] pb-[12px]">
         <section className="flex min-h-0 w-full flex-1 flex-col items-center justify-center self-stretch">
           <div
             className="mx-auto grid w-full max-w-[390px] gap-[3.92px]"
@@ -1029,12 +1415,61 @@ export default function Page() {
                 className="inline-flex h-[33.96px] w-full items-center justify-center rounded-[4.85px] bg-[#D9E2F8] text-[#1B1B1D]"
                 aria-label="Backspace"
               >
-                <Delete className="h-[19.4px] w-[19.4px]" />
+                <img
+                  src={dlsAssets.backspace}
+                  alt="Backspace"
+                  className="h-[19.4px] w-[19.4px]"
+                  width={20}
+                  height={20}
+                  loading="lazy"
+                  decoding="async"
+                />
               </button>
             </div>
           </section>
         </div>
       </div>
+
+      {isPauseOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-[2px]">
+          <div className="flex w-full max-w-[320px] flex-col items-center rounded-[20px] bg-white px-[24px] py-[32px] shadow-[0_20px_60px_0_rgba(0,0,0,0.30)]">
+            <img
+              src={dlsAssets.timer}
+              alt="Paused"
+              className="h-[48px] w-[48px]"
+              width={48}
+              height={48}
+              loading="lazy"
+              decoding="async"
+            />
+            <h2 className="mt-4 text-center text-[24px] leading-[36px] font-semibold text-black">
+              Game Paused
+            </h2>
+            <p className="mt-2 text-center text-[18px] leading-[28px] font-normal text-black/70">
+              Take a break and continue when you are ready.
+            </p>
+            <div className="mt-6 flex w-full flex-col gap-[10px]">
+              <PauseToggleRow
+                label="Turn off hints"
+                checked={isHintsTurnedOff}
+                onChange={setIsHintsTurnedOff}
+              />
+              <PauseToggleRow
+                label="Turn off word blast"
+                checked={isWordBlastTurnedOff}
+                onChange={setIsWordBlastTurnedOff}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsPauseOpen(false)}
+              className="mt-6 inline-flex h-[56px] w-full max-w-[240px] items-center justify-center rounded-[12px] bg-black px-4 py-[14px] text-[20px] leading-[30px] font-semibold text-white"
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
@@ -1060,6 +1495,41 @@ function KeyButton({
   )
 }
 
+function PauseToggleRow({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-[12px] border border-black/10 bg-[#F8F6EF] px-[12px] py-[10px]">
+      <span className="text-[14px] leading-[20px] font-semibold text-black">
+        {label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "relative inline-flex h-[26px] w-[44px] items-center rounded-full transition-colors",
+          checked ? "bg-black" : "bg-black/20"
+        )}
+      >
+        <span
+          className={cn(
+            "h-[20px] w-[20px] rounded-full bg-white transition-transform",
+            checked ? "translate-x-[22px]" : "translate-x-[3px]"
+          )}
+        />
+      </button>
+    </div>
+  )
+}
+
 function HomeMascot() {
   return (
     <img
@@ -1076,25 +1546,29 @@ function HomeMascot() {
 
 function SummaryCelebrationIcon() {
   return (
-    <div className="relative h-[72px] w-[72px] overflow-hidden">
-      <div className="absolute top-[2px] left-[2px] h-[68px] w-[68px] rounded-full bg-white" />
-      <div className="absolute top-[22px] left-[16px] h-[22px] w-[12px] rounded-full bg-[#FFC005]" />
-      <div className="absolute top-[22px] right-[16px] h-[22px] w-[12px] rounded-full bg-[#FFC005]" />
-      <div className="absolute top-[18px] left-[24px] h-[29px] w-[24px] rounded-[12px] bg-[#FFDF05]" />
-      <div className="absolute top-[18px] left-[23px] h-[3px] w-[26px] rounded-full bg-[#FF8805]" />
-      <div className="absolute top-[26px] left-[30px] h-[11px] w-[12px] rounded-full bg-[#F44040]" />
-      <div className="absolute top-[43px] left-[28px] h-[10px] w-[16px] rounded-full bg-[#FFC005]" />
-      <div className="absolute top-[52px] left-[25px] h-[6px] w-[22px] rounded-full bg-[#461B1B]" />
-    </div>
+    <img
+      src={dlsAssets.trophy}
+      alt="Trophy"
+      className="h-[72px] w-[72px] object-contain"
+      width={72}
+      height={72}
+      loading="lazy"
+      decoding="async"
+    />
   )
 }
 
 function FlameBadge() {
   return (
-    <div className="relative h-[24px] w-[24px] overflow-hidden">
-      <div className="absolute top-[1px] left-[3px] h-[22px] w-[18px] rounded-[50%_50%_60%_60%] bg-[radial-gradient(ellipse_75%_96%_at_48%_100%,#FF9800_31%,#FF6D00_66%,#F44336_97%)]" />
-      <div className="absolute top-[9px] left-[8px] h-[14px] w-[9px] rounded-[50%_50%_60%_60%] bg-[radial-gradient(ellipse_94%_116%_at_53%_10%,#FFF176_21%,#FFF7AD_67%,rgba(255,241,118,0)_94%)]" />
-    </div>
+    <img
+      src={dlsAssets.fire}
+      alt="Streak"
+      className="h-[24px] w-[24px] object-contain"
+      width={24}
+      height={24}
+      loading="lazy"
+      decoding="async"
+    />
   )
 }
 
@@ -1410,6 +1884,46 @@ function getPuzzleStorageKey(puzzleId: string) {
   return `daily-crossword-progress:${puzzleId}`
 }
 
+const SETTINGS_STORAGE_KEY = "daily-crossword-settings"
+
+function loadStoredSettings(): GameSettings {
+  if (typeof window === "undefined") {
+    return {
+      isHintsTurnedOff: false,
+      isWordBlastTurnedOff: false,
+    }
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY)
+    if (!raw) {
+      return {
+        isHintsTurnedOff: false,
+        isWordBlastTurnedOff: false,
+      }
+    }
+
+    const parsed = JSON.parse(raw) as Partial<GameSettings>
+    return {
+      isHintsTurnedOff: Boolean(parsed.isHintsTurnedOff),
+      isWordBlastTurnedOff: Boolean(parsed.isWordBlastTurnedOff),
+    }
+  } catch {
+    return {
+      isHintsTurnedOff: false,
+      isWordBlastTurnedOff: false,
+    }
+  }
+}
+
+function storeSettings(settings: GameSettings) {
+  if (typeof window === "undefined") {
+    return
+  }
+
+  window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+}
+
 function serializeGame(game: GameState) {
   return JSON.stringify({
     ...game,
@@ -1620,4 +2134,14 @@ function formatPuzzleDateLong(dateKey: string) {
   const year = date.getFullYear()
 
   return `${day} ${month}, ${year}`
+}
+
+function normalizeMeaning(meaning: string | undefined, answer: string) {
+  const normalized = meaning?.trim() ?? ""
+
+  if (normalized) {
+    return normalized
+  }
+
+  return `Meaning for ${answer} will be added soon.`
 }

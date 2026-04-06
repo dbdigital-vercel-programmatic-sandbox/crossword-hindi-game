@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
+  Check,
   CheckCircle2,
   CircleX,
+  Pencil,
   Plus,
   TriangleAlert,
   Trash2,
@@ -33,6 +35,7 @@ type BuilderWord = {
   id: string
   answer: string
   clue: string
+  meaning: string
 }
 
 type Direction = "across" | "down"
@@ -47,6 +50,7 @@ type ClueItem = {
   id: string
   number: number
   clue: string
+  meaning: string
   answer: string
   row: number
   col: number
@@ -79,7 +83,7 @@ export function CrosswordCms({
   databaseConnected: boolean
 }) {
   const [puzzles, setPuzzles] = useState(initialPuzzles)
-  const [form, setForm] = useState({ word: "", clue: "" })
+  const [form, setForm] = useState({ word: "", clue: "", meaning: "" })
   const [title, setTitle] = useState("Untitled Puzzle")
   const [scheduledDate, setScheduledDate] = useState(getLocalDateKey())
   const [words, setWords] = useState<BuilderWord[]>([])
@@ -101,6 +105,12 @@ export function CrosswordCms({
       message: "",
       bonusWord: null,
     })
+  const [editingWordId, setEditingWordId] = useState<string | null>(null)
+  const [editingForm, setEditingForm] = useState({
+    word: "",
+    clue: "",
+    meaning: "",
+  })
 
   const layout = useMemo(
     () => buildCrosswordLayout(words, title, scheduledDate),
@@ -148,6 +158,7 @@ export function CrosswordCms({
 
     const answer = normalizeAnswer(form.word)
     const clue = form.clue.trim()
+    const meaning = form.meaning.trim()
 
     if (answer.length < 3) {
       setError("Enter a word with at least 3 letters.")
@@ -161,8 +172,8 @@ export function CrosswordCms({
       return
     }
 
-    if (!clue) {
-      setError("Add a clue or hint before saving the word.")
+    if (!clue || !meaning) {
+      setError("Add a clue/hint and meaning before saving the word.")
       return
     }
 
@@ -177,14 +188,79 @@ export function CrosswordCms({
         id: createWordId(),
         answer,
         clue,
+        meaning,
       },
     ])
-    setForm({ word: "", clue: "" })
+    setForm({ word: "", clue: "", meaning: "" })
     setError("")
   }
 
   function handleDeleteWord(id: string) {
     setWords((current) => current.filter((word) => word.id !== id))
+
+    if (editingWordId === id) {
+      setEditingWordId(null)
+      setEditingForm({ word: "", clue: "", meaning: "" })
+    }
+  }
+
+  function handleStartEditingWord(word: BuilderWord) {
+    setEditingWordId(word.id)
+    setEditingForm({
+      word: word.answer,
+      clue: word.clue,
+      meaning: word.meaning,
+    })
+    setError("")
+  }
+
+  function handleCancelEditingWord() {
+    setEditingWordId(null)
+    setEditingForm({ word: "", clue: "", meaning: "" })
+  }
+
+  function handleSaveWordEdit(id: string) {
+    const answer = normalizeAnswer(editingForm.word)
+    const clue = editingForm.clue.trim()
+    const meaning = editingForm.meaning.trim()
+
+    if (answer.length < 3) {
+      setError("Enter a word with at least 3 letters.")
+      return
+    }
+
+    if (answer.length > MAX_GRID_SIZE) {
+      setError(
+        `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
+      )
+      return
+    }
+
+    if (!clue || !meaning) {
+      setError("Add a clue/hint and meaning before saving the word.")
+      return
+    }
+
+    if (words.some((word) => word.id !== id && word.answer === answer)) {
+      setError("That word is already in the builder.")
+      return
+    }
+
+    setWords((current) =>
+      current.map((word) =>
+        word.id === id
+          ? {
+              ...word,
+              answer,
+              clue,
+              meaning,
+            }
+          : word
+      )
+    )
+    setEditingWordId(null)
+    setEditingForm({ word: "", clue: "", meaning: "" })
+    setError("")
   }
 
   async function handleScheduleSave() {
@@ -423,6 +499,29 @@ export function CrosswordCms({
                       />
                     </label>
 
+                    <label className="grid gap-2 text-sm">
+                      <span className="font-medium text-[#455045]">
+                        Meaning
+                      </span>
+                      <textarea
+                        rows={3}
+                        value={form.meaning}
+                        disabled={!clueIsEnabled}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            meaning: event.target.value,
+                          }))
+                        }
+                        placeholder={
+                          clueIsEnabled
+                            ? "A place where people buy and sell goods"
+                            : "Enter at least 3 letters to unlock the meaning field"
+                        }
+                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b] disabled:cursor-not-allowed disabled:border-[#e8e1d4] disabled:bg-[#f3eee5] disabled:text-[#998f7d]"
+                      />
+                    </label>
+
                     <button
                       type="submit"
                       className="inline-flex items-center gap-2 rounded-full bg-[#28352b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f2a22]"
@@ -550,7 +649,8 @@ export function CrosswordCms({
               <div className="mt-4 space-y-3">
                 {words.length === 0 ? (
                   <div className="rounded-2xl bg-[#f6f3ec] px-4 py-5 text-sm text-[#6a7268]">
-                    Add your first word and clue to generate the crossword.
+                    Add your first word, clue, and meaning to generate the
+                    crossword.
                   </div>
                 ) : (
                   words.map((word) => (
@@ -559,23 +659,104 @@ export function CrosswordCms({
                       className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4"
                     >
                       <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-sm font-semibold tracking-[0.08em] text-[#243026] uppercase">
-                            {word.answer}
-                          </div>
-                          <div className="mt-2 text-sm leading-6 text-[#5f675f]">
-                            {word.clue}
-                          </div>
+                        <div className="min-w-0 flex-1">
+                          {editingWordId === word.id ? (
+                            <div className="space-y-3">
+                              <input
+                                value={editingForm.word}
+                                onChange={(event) =>
+                                  setEditingForm((current) => ({
+                                    ...current,
+                                    word: event.target.value,
+                                  }))
+                                }
+                                placeholder="MARKET"
+                                className="w-full rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm uppercase transition outline-none focus:border-[#8f7f5b]"
+                              />
+                              <textarea
+                                rows={3}
+                                value={editingForm.clue}
+                                onChange={(event) =>
+                                  setEditingForm((current) => ({
+                                    ...current,
+                                    clue: event.target.value,
+                                  }))
+                                }
+                                placeholder="Weekend bargain stop"
+                                className="w-full resize-none rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm transition outline-none focus:border-[#8f7f5b]"
+                              />
+                              <textarea
+                                rows={3}
+                                value={editingForm.meaning}
+                                onChange={(event) =>
+                                  setEditingForm((current) => ({
+                                    ...current,
+                                    meaning: event.target.value,
+                                  }))
+                                }
+                                placeholder="A place where people buy and sell goods"
+                                className="w-full resize-none rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm transition outline-none focus:border-[#8f7f5b]"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="text-sm font-semibold tracking-[0.08em] text-[#243026] uppercase">
+                                {word.answer}
+                              </div>
+                              <div className="mt-2 text-sm leading-6 text-[#5f675f]">
+                                {word.clue}
+                              </div>
+                              <div className="mt-2 text-sm leading-6 text-[#5f675f]">
+                                <span className="font-semibold text-[#243026]">
+                                  Meaning:
+                                </span>{" "}
+                                {word.meaning}
+                              </div>
+                            </>
+                          )}
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteWord(word.id)}
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
-                          aria-label={`Delete ${word.answer}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          {editingWordId === word.id ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveWordEdit(word.id)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#c5d7c1] bg-[#e8f3e3] text-[#305235] transition hover:border-[#a8c29f] hover:bg-[#dcedd6]"
+                                aria-label={`Save ${word.answer}`}
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleCancelEditingWord}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#e2c8b7] bg-[#fff5ef] text-[#91563a] transition hover:border-[#d9b29a] hover:bg-[#fde9de]"
+                                aria-label={`Cancel editing ${word.answer}`}
+                              >
+                                <CircleX className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditingWord(word)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
+                                aria-label={`Edit ${word.answer}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteWord(word.id)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
+                                aria-label={`Delete ${word.answer}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -851,15 +1032,20 @@ function buildCrosswordLayout(
       filled: !cell.isBlock,
     }))
   )
-  const clues = derivedWords.map((word) => ({
-    id: word.id,
-    number: word.number,
-    clue: word.clue,
-    answer: word.answer,
-    row: word.row,
-    col: word.col,
-    direction: word.direction,
-  }))
+  const clues = derivedWords.map((word) => {
+    const sourceWord = words.find((item) => item.answer === word.answer)
+
+    return {
+      id: word.id,
+      number: word.number,
+      clue: word.clue,
+      meaning: sourceWord?.meaning ?? "",
+      answer: word.answer,
+      row: word.row,
+      col: word.col,
+      direction: word.direction,
+    }
+  })
 
   return {
     draft: result.draft,
@@ -870,6 +1056,7 @@ function buildCrosswordLayout(
       id: `unplaced-${index}-${word.answer}`,
       answer: word.answer,
       clue: word.clue ?? "",
+      meaning: words.find((item) => item.answer === word.answer)?.meaning ?? "",
       bonusWord:
         suggestBonusWord({
           words: words.map((item) => ({
@@ -949,6 +1136,7 @@ function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
       id: createWordId(),
       answer: normalizeAnswer(clue.answer),
       clue: clue.clue,
+      meaning: clue.meaning?.trim() || "",
     }))
 }
 
@@ -976,6 +1164,7 @@ function buildScheduledPuzzle(
       number: clue.number,
       direction: clue.direction,
       clue: clue.clue,
+      meaning: clue.meaning,
       answer: clue.answer,
       row: clue.row,
       col: clue.col,
