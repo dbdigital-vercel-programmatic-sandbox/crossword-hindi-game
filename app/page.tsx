@@ -84,6 +84,9 @@ const keyboardRows = [
   "ZXCVBNM".split(""),
 ]
 
+const keyboardButtonClassName =
+  "inline-flex h-[48px] w-full min-w-0 items-center justify-center rounded-[8px] bg-white text-[18px] leading-[26px] font-semibold text-[#1B1B1D] shadow-[0px_1.7777777910232544px_0px_rgba(0,0,0,0.25)]"
+
 const dlsAssets = {
   home: "https://raw.githubusercontent.com/joefrancis-dot/DLS-assets/main/Home_Outline.svg",
   pause:
@@ -1243,7 +1246,7 @@ export default function Page() {
         </div>
       </header>
 
-      <div className="mx-auto inline-flex h-full w-full max-w-[430px] flex-1 flex-col items-center justify-start gap-[15px] px-[12px] pt-[106px] pb-[12px]">
+      <div className="mx-auto inline-flex h-full w-full max-w-[430px] flex-1 flex-col items-center justify-start gap-[15px] px-[12px] pt-[106px] pb-[196px]">
         <section className="flex min-h-0 w-full flex-1 flex-col items-center justify-center self-stretch">
           <div
             className="mx-auto grid w-full max-w-[390px] gap-[3.92px]"
@@ -1350,7 +1353,7 @@ export default function Page() {
           <section
             className={cn(
               homeTitleFont.className,
-              "inline-flex w-full items-center justify-between self-stretch overflow-hidden rounded-[3px] bg-[#89986D] px-[5px] py-[8px]"
+              "inline-flex min-h-[78px] w-full items-center justify-between self-stretch overflow-hidden rounded-[3px] bg-[#89986D] px-[5px] py-[8px]"
             )}
           >
             <button
@@ -1367,12 +1370,12 @@ export default function Page() {
 
             <div
               key={activeClue.id}
-              className="animate-clue-fade flex flex-1 flex-col items-start justify-start gap-[5px] px-[8px]"
+              className="animate-clue-fade flex min-h-full flex-1 flex-col items-start justify-center gap-[5px] self-stretch px-[8px]"
             >
               <div className="text-[11px] font-semibold tracking-[2.2px] text-[#C5D89D] uppercase">
                 Current Clue
               </div>
-              <div className="text-[16px] font-semibold text-[#F6F0D7]">
+              <div className="text-[16px] leading-[20px] font-semibold text-[#F6F0D7]">
                 {activeClue.number}
                 {activeClue.direction === "across" ? "a" : "d"}.{" "}
                 {activeClue.clue}
@@ -1391,44 +1394,46 @@ export default function Page() {
               />
             </button>
           </section>
-
-          <section className="flex w-full flex-col items-center justify-center gap-[8.89px] self-stretch rounded-[10px] bg-[rgba(91,76,12,0.10)] p-[10px]">
-            <div className="grid w-full grid-cols-10 gap-[4.65px]">
-              {keyboardRows[0].map((key) => (
-                <KeyButton key={key} value={key} onPress={handleLetter} />
-              ))}
-            </div>
-
-            <div className="mx-[30px] grid w-[calc(100%-60px)] grid-cols-9 gap-[4.65px] self-stretch">
-              {keyboardRows[1].map((key) => (
-                <KeyButton key={key} value={key} onPress={handleLetter} />
-              ))}
-            </div>
-
-            <div className="mx-[43px] grid w-[calc(100%-86px)] grid-cols-[repeat(7,minmax(0,1fr))_1.5fr] gap-[4.65px] self-stretch">
-              {keyboardRows[2].map((key) => (
-                <KeyButton key={key} value={key} onPress={handleLetter} />
-              ))}
-              <button
-                type="button"
-                onClick={handleBackspace}
-                className="inline-flex h-[33.96px] w-full items-center justify-center rounded-[4.85px] bg-[#D9E2F8] text-[#1B1B1D]"
-                aria-label="Backspace"
-              >
-                <img
-                  src={dlsAssets.backspace}
-                  alt="Backspace"
-                  className="h-[19.4px] w-[19.4px]"
-                  width={20}
-                  height={20}
-                  loading="lazy"
-                  decoding="async"
-                />
-              </button>
-            </div>
-          </section>
         </div>
       </div>
+
+      <section className="fixed right-0 bottom-0 left-0 z-20 bg-black/25 px-[12px] pt-[12px] pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        <div className="mx-auto flex w-full max-w-[430px] flex-col gap-[8px]">
+          <div className="grid w-full grid-cols-10 gap-[6px]">
+            {keyboardRows[0].map((key) => (
+              <KeyButton key={key} value={key} onPress={handleLetter} />
+            ))}
+          </div>
+
+          <div className="grid w-full grid-cols-9 gap-[6px] px-[6%]">
+            {keyboardRows[1].map((key) => (
+              <KeyButton key={key} value={key} onPress={handleLetter} />
+            ))}
+          </div>
+
+          <div className="grid w-full grid-cols-[repeat(7,minmax(0,1fr))_1.35fr] gap-[6px] px-[8.5%]">
+            {keyboardRows[2].map((key) => (
+              <KeyButton key={key} value={key} onPress={handleLetter} />
+            ))}
+            <button
+              type="button"
+              onClick={handleBackspace}
+              className={keyboardButtonClassName}
+              aria-label="Backspace"
+            >
+              <img
+                src={dlsAssets.backspace}
+                alt="Backspace"
+                className="h-[20px] w-[20px]"
+                width={20}
+                height={20}
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
+          </div>
+        </div>
+      </section>
 
       {isPauseOpen && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-[2px]">
@@ -1485,12 +1490,9 @@ function KeyButton({
     <button
       type="button"
       onClick={() => onPress(value)}
-      className={cn(
-        homeBodyFont.className,
-        "inline-flex h-[33.96px] w-full min-w-0 items-center justify-center rounded-[4.85px] bg-white text-[17.79px] font-normal text-[#1B1B1D] lowercase"
-      )}
+      className={cn(homeBodyFont.className, keyboardButtonClassName)}
     >
-      {value.toLowerCase()}
+      {value}
     </button>
   )
 }
