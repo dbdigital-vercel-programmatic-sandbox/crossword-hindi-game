@@ -59,6 +59,20 @@ export type BonusWordSuggestion = {
   answer: string
 }
 
+export type ManualWordPlacement = {
+  id: string
+  answer: string
+  row: number
+  col: number
+  direction: Direction
+}
+
+export type ManualPlacementValidationResult = {
+  valid: boolean
+  intersections: number
+  reason: string | null
+}
+
 export type ValidationCheck = {
   label: string
   passed: boolean
@@ -371,6 +385,7 @@ export function buildPuzzleFromDraft(draft: CrosswordDraft): CrosswordPuzzle {
       number: word.number,
       direction: word.direction,
       clue: normalizeClue(word.clue),
+      meaning: "",
       answer: word.answer,
       row: word.row,
       col: word.col,
@@ -593,6 +608,106 @@ export function suggestBonusWord({
   return null
 }
 
+export function validateManualWordPlacement({
+  rows,
+  cols,
+  placements,
+  candidate,
+}: {
+  rows: number
+  cols: number
+  placements: ManualWordPlacement[]
+  candidate: ManualWordPlacement
+}): ManualPlacementValidationResult {
+  const board = createPlacementBoard(rows, cols)
+
+  placements
+    .filter((placement) => placement.id !== candidate.id)
+    .forEach((placement) => {
+      applyPlacement(
+        board,
+        { ...placement, intersections: 0 },
+        { answer: placement.answer, clue: "" }
+      )
+    })
+
+  const intersections = countPlacementFit(
+    board,
+    candidate.row,
+    candidate.col,
+    candidate.direction,
+    candidate.answer,
+    rows,
+    cols,
+    true
+  )
+
+  if (intersections === -1) {
+    return {
+      valid: false,
+      intersections: 0,
+      reason:
+        "That placement collides with another word or goes out of bounds.",
+    }
+  }
+
+  return {
+    valid: true,
+    intersections,
+    reason: null,
+  }
+}
+
+export function buildDraftFromManualPlacements({
+  placements,
+  rows,
+  cols,
+  title = "",
+  date = getLocalDateKey(),
+}: {
+  placements: ManualWordPlacement[]
+  rows: number
+  cols: number
+  title?: string
+  date?: string
+}) {
+  const board = createPlacementBoard(rows, cols)
+
+  for (const placement of placements) {
+    const intersections = countPlacementFit(
+      board,
+      placement.row,
+      placement.col,
+      placement.direction,
+      placement.answer,
+      rows,
+      cols,
+      true
+    )
+
+    if (intersections === -1) {
+      return {
+        draft: null,
+        error: `Unable to place ${placement.answer} at row ${placement.row + 1}, col ${placement.col + 1}.`,
+      }
+    }
+
+    applyPlacement(
+      board,
+      { ...placement, intersections: intersections },
+      { answer: placement.answer, clue: "" }
+    )
+  }
+
+  const draft = createBlockedDraft(rows, cols, title, date)
+  fillDraftFromBoard(draft, board)
+
+  return {
+    draft,
+    error: null,
+  }
+}
+
 function generateDraftWithPlacement({
   words,
   rows,
@@ -742,6 +857,7 @@ function buildWordFromDraft(
     number,
     direction,
     clue: clues[id] ?? "",
+    meaning: "",
     answer,
     row,
     col,

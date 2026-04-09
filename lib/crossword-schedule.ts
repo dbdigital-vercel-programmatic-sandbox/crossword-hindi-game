@@ -5,6 +5,7 @@ export type ClueDefinition = {
   number: number
   direction: Direction
   clue: string
+  meaning: string
   answer: string
   row: number
   col: number
@@ -46,6 +47,23 @@ export function getScheduledPuzzle(
 
   if (exactMatch) {
     return exactMatch
+  }
+
+  const year = dateKey.slice(0, 4)
+  const aprilFirstInSameYear = sorted.find(
+    (puzzle) => puzzle.date === `${year}-04-01`
+  )
+
+  if (aprilFirstInSameYear) {
+    return aprilFirstInSameYear
+  }
+
+  const aprilFirstAnyYear = sorted.find((puzzle) =>
+    puzzle.date.endsWith("-04-01")
+  )
+
+  if (aprilFirstAnyYear) {
+    return aprilFirstAnyYear
   }
 
   const previousPuzzle = [...sorted]
