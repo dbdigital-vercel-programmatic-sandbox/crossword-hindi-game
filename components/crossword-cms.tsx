@@ -1,15 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import {
-  Check,
-  CheckCircle2,
-  CircleX,
-  Pencil,
-  Plus,
-  TriangleAlert,
-  Trash2,
-} from "lucide-react"
+import { RotateCw, Trash2 } from "lucide-react"
 
 import {
   Dialog,
@@ -19,26 +11,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  buildDraftFromManualPlacements,
   deriveWordsFromDraft,
   FIXED_GRID_SIZES,
-  generateCompactDraftFromWordList,
   keyFor,
-  previewWordPlacement,
-  suggestBonusWord,
+  validateManualWordPlacement,
   type CrosswordDraft,
+  type ManualWordPlacement,
 } from "@/lib/crossword-editor"
-import { getLocalDateKey, type CrosswordPuzzle } from "@/lib/crossword-schedule"
+import {
+  getLocalDateKey,
+  type CrosswordPuzzle,
+  type Direction,
+} from "@/lib/crossword-schedule"
 
-type BuilderWord = {
+type EditorWord = {
   id: string
   answer: string
   clue: string
   meaning: string
+  row: number
+  col: number
+  direction: Direction
 }
-
-type Direction = "across" | "down"
 
 type GridCell = {
   letter: string
@@ -48,6 +44,7 @@ type GridCell = {
 
 type ClueItem = {
   id: string
+  sourceWordId: string
   number: number
   clue: string
   meaning: string
@@ -62,18 +59,12 @@ type LayoutResult = {
   cells: GridCell[][]
   across: ClueItem[]
   down: ClueItem[]
-  unplaced: Array<BuilderWord & { bonusWord: string | null }>
   recommendationLabel: string
 }
 
-type WordCompatibilityStatus = {
-  tone: "neutral" | "green" | "yellow" | "red"
-  message: string
-  bonusWord: string | null
-}
+type CellPoint = { row: number; col: number }
 
 let nextWordId = 1
-const MAX_GRID_SIZE = FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
 
 export function CrosswordCms({
   initialPuzzles,
@@ -83,39 +74,45 @@ export function CrosswordCms({
   databaseConnected: boolean
 }) {
   const [puzzles, setPuzzles] = useState(initialPuzzles)
-  const [form, setForm] = useState({ word: "", clue: "", meaning: "" })
   const [title, setTitle] = useState("Untitled Puzzle")
   const [scheduledDate, setScheduledDate] = useState(getLocalDateKey())
-  const [words, setWords] = useState<BuilderWord[]>([])
+  const [gridSize, setGridSize] = useState<(typeof FIXED_GRID_SIZES)[number]>(9)
+  const [words, setWords] = useState<EditorWord[]>([])
+  const [selectedWordIds, setSelectedWordIds] = useState<string[]>([])
   const [error, setError] = useState("")
   const [saveMessage, setSaveMessage] = useState(
     databaseConnected
-      ? "Choose a date to schedule this crossword."
+      ? "Click any grid cell to add words directly on the board."
       : "Database offline. You can still build and preview locally."
   )
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState("add-word")
   const [isLoadOpen, setIsLoadOpen] = useState(false)
   const [selectedLoadDate, setSelectedLoadDate] = useState(
     initialPuzzles.at(-1)?.date ?? ""
   )
-  const [wordCompatibility, setWordCompatibility] =
-    useState<WordCompatibilityStatus>({
-      tone: "neutral",
-      message: "",
-      bonusWord: null,
-    })
-  const [editingWordId, setEditingWordId] = useState<string | null>(null)
-  const [editingForm, setEditingForm] = useState({
-    word: "",
-    clue: "",
-    meaning: "",
+  const [composer, setComposer] = useState<{
+    open: boolean
+    row: number
+    col: number
+    direction: Direction
+    answer: string
+  }>({
+    open: false,
+    row: 0,
+    col: 0,
+    direction: "across",
+    answer: "",
   })
+  const [lasso, setLasso] = useState<{
+    start: CellPoint
+    end: CellPoint
+  } | null>(null)
+  const [dragState, setDragState] = useState<{
+    ids: string[]
+    start: CellPoint
+    current: CellPoint
+  } | null>(null)
 
-  const layout = useMemo(
-    () => buildCrosswordLayout(words, title, scheduledDate),
-    [scheduledDate, title, words]
-  )
   const scheduledDates = useMemo(
     () =>
       puzzles
@@ -123,144 +120,383 @@ export function CrosswordCms({
         .sort((left, right) => left.localeCompare(right)),
     [puzzles]
   )
+
+  const layout = useMemo(
+    () =>
+      buildEditorLayout({
+        words,
+        rows: gridSize,
+        cols: gridSize,
+        title,
+        date: scheduledDate,
+      }),
+    [gridSize, scheduledDate, title, words]
+  )
+
+  const wordById = useMemo(
+    () => new Map(words.map((word) => [word.id, word])),
+    [words]
+  )
+
+  const occupancy = useMemo(() => {
+    const map = new Map<string, string[]>()
+
+    words.forEach((word) => {
+      wordCells(word).forEach((cell) => {
+        const cellKey = keyFor(cell.row, cell.col)
+        const bucket = map.get(cellKey) ?? []
+        bucket.push(word.id)
+        map.set(cellKey, bucket)
+      })
+    })
+
+    return map
+  }, [words])
+
+  const selectedCellKeys = useMemo(() => {
+    const keys = new Set<string>()
+
+    selectedWordIds.forEach((id) => {
+      const word = wordById.get(id)
+      if (!word) {
+        return
+      }
+
+      wordCells(word).forEach((cell) => keys.add(keyFor(cell.row, cell.col)))
+    })
+
+    return keys
+  }, [selectedWordIds, wordById])
+
+  const lassoSelectionPreview = useMemo(() => {
+    if (!lasso) {
+      return new Set<string>()
+    }
+
+    const next = new Set<string>()
+    words.forEach((word) => {
+      if (
+        wordCells(word).some((cell) =>
+          pointIsInRect(cell, lasso.start, lasso.end)
+        )
+      ) {
+        next.add(word.id)
+      }
+    })
+    return next
+  }, [lasso, words])
+
+  const previewSelection = lasso
+    ? lassoSelectionPreview
+    : new Set(selectedWordIds)
+
   const hasScheduledDate = scheduledDates.includes(scheduledDate)
-  const clueIsEnabled = normalizeAnswer(form.word).length >= 3
 
   useEffect(() => {
-    const answer = normalizeAnswer(form.word)
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        (event.key !== "Backspace" && event.key !== "Delete") ||
+        selectedWordIds.length === 0
+      ) {
+        return
+      }
 
-    if (answer.length < 2) {
-      setWordCompatibility({ tone: "neutral", message: "", bonusWord: null })
-      return
-    }
+      const target = event.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return
+      }
 
-    const timeoutId = window.setTimeout(() => {
-      const preview = previewWordPlacement({ words, answer })
-      const bonusSuggestion =
-        preview.status === "blocked"
-          ? suggestBonusWord({ words, answer })
-          : null
-
-      setWordCompatibility(
-        buildWordCompatibilityStatus(
-          preview,
-          words.length === 0,
-          bonusSuggestion
-        )
+      event.preventDefault()
+      setWords((current) =>
+        current.filter((word) => !selectedWordIds.includes(word.id))
       )
-    }, 300)
-
-    return () => window.clearTimeout(timeoutId)
-  }, [form.word, words])
-
-  function handleAddWord(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-
-    const answer = normalizeAnswer(form.word)
-    const clue = form.clue.trim()
-    const meaning = form.meaning.trim()
-
-    if (answer.length < 3) {
-      setError("Enter a word with at least 3 letters.")
-      return
+      setSelectedWordIds([])
+      setSaveMessage("Removed selected words from the grid.")
     }
 
-    if (answer.length > MAX_GRID_SIZE) {
-      setError(
-        `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
-      )
-      return
-    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selectedWordIds])
 
-    if (!clue || !meaning) {
-      setError("Add a clue/hint and meaning before saving the word.")
-      return
-    }
-
-    if (words.some((word) => word.answer === answer)) {
-      setError("That word is already in the builder.")
-      return
-    }
-
-    setWords((current) => [
-      ...current,
-      {
-        id: createWordId(),
-        answer,
-        clue,
-        meaning,
-      },
-    ])
-    setForm({ word: "", clue: "", meaning: "" })
-    setError("")
-  }
-
-  function handleDeleteWord(id: string) {
-    setWords((current) => current.filter((word) => word.id !== id))
-
-    if (editingWordId === id) {
-      setEditingWordId(null)
-      setEditingForm({ word: "", clue: "", meaning: "" })
-    }
-  }
-
-  function handleStartEditingWord(word: BuilderWord) {
-    setEditingWordId(word.id)
-    setEditingForm({
-      word: word.answer,
-      clue: word.clue,
-      meaning: word.meaning,
+  function openComposer(row: number, col: number) {
+    setComposer({
+      open: true,
+      row,
+      col,
+      direction: "across",
+      answer: "",
     })
     setError("")
   }
 
-  function handleCancelEditingWord() {
-    setEditingWordId(null)
-    setEditingForm({ word: "", clue: "", meaning: "" })
+  function closeComposer() {
+    setComposer((current) => ({ ...current, open: false, answer: "" }))
   }
 
-  function handleSaveWordEdit(id: string) {
-    const answer = normalizeAnswer(editingForm.word)
-    const clue = editingForm.clue.trim()
-    const meaning = editingForm.meaning.trim()
+  function handleComposerSave() {
+    const answer = normalizeAnswer(composer.answer)
 
     if (answer.length < 3) {
       setError("Enter a word with at least 3 letters.")
       return
     }
 
-    if (answer.length > MAX_GRID_SIZE) {
-      setError(
-        `Keep answers to ${MAX_GRID_SIZE} letters or fewer. The builder expands up to ${MAX_GRID_SIZE}x${MAX_GRID_SIZE}.`
+    if (answer.length > gridSize) {
+      setError(`Keep answers to ${gridSize} letters or fewer for this grid.`)
+      return
+    }
+
+    if (words.some((word) => word.answer === answer)) {
+      setError("That answer already exists. Use a unique word.")
+      return
+    }
+
+    const candidate: EditorWord = {
+      id: createWordId(),
+      answer,
+      clue: "",
+      meaning: "",
+      row: composer.row,
+      col: composer.col,
+      direction: composer.direction,
+    }
+
+    const nextWords = [...words, candidate]
+    const validationError = validateWordSet(nextWords, gridSize, gridSize)
+
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
+    setWords(nextWords)
+    setSelectedWordIds([candidate.id])
+    setSaveMessage(
+      `Added ${candidate.answer} at row ${candidate.row + 1}, col ${candidate.col + 1}.`
+    )
+    setError("")
+    closeComposer()
+  }
+
+  function handleCellMouseDown(
+    row: number,
+    col: number,
+    event: React.MouseEvent<HTMLDivElement>
+  ) {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    closeComposer()
+
+    const idsAtCell = occupancy.get(keyFor(row, col)) ?? []
+
+    if (idsAtCell.length > 0) {
+      const primaryId = idsAtCell[0]
+      const withModifier = event.shiftKey || event.metaKey || event.ctrlKey
+
+      if (withModifier) {
+        setSelectedWordIds((current) =>
+          current.includes(primaryId)
+            ? current.filter((id) => id !== primaryId)
+            : [...current, primaryId]
+        )
+        return
+      }
+
+      const dragIds = selectedWordIds.includes(primaryId)
+        ? selectedWordIds
+        : [primaryId]
+      setSelectedWordIds(dragIds)
+      setDragState({
+        ids: dragIds,
+        start: { row, col },
+        current: { row, col },
+      })
+      return
+    }
+
+    setSelectedWordIds([])
+    setLasso({ start: { row, col }, end: { row, col } })
+  }
+
+  function handleCellMouseEnter(row: number, col: number) {
+    if (dragState) {
+      setDragState((current) =>
+        current ? { ...current, current: { row, col } } : current
       )
       return
     }
 
-    if (!clue || !meaning) {
-      setError("Add a clue/hint and meaning before saving the word.")
+    if (lasso) {
+      setLasso((current) =>
+        current ? { ...current, end: { row, col } } : current
+      )
+    }
+  }
+
+  function finishPointerAction() {
+    if (dragState) {
+      const deltaRow = dragState.current.row - dragState.start.row
+      const deltaCol = dragState.current.col - dragState.start.col
+
+      if (deltaRow !== 0 || deltaCol !== 0) {
+        const nextWords = words.map((word) =>
+          dragState.ids.includes(word.id)
+            ? {
+                ...word,
+                row: word.row + deltaRow,
+                col: word.col + deltaCol,
+              }
+            : word
+        )
+        const validationError = validateWordSet(nextWords, gridSize, gridSize)
+
+        if (validationError) {
+          setError(validationError)
+        } else {
+          setWords(nextWords)
+          setError("")
+          setSaveMessage("Moved selected words.")
+        }
+      }
+
+      setDragState(null)
       return
     }
 
-    if (words.some((word) => word.id !== id && word.answer === answer)) {
-      setError("That word is already in the builder.")
+    if (lasso) {
+      const next = words
+        .filter((word) =>
+          wordCells(word).some((cell) =>
+            pointIsInRect(cell, lasso.start, lasso.end)
+          )
+        )
+        .map((word) => word.id)
+
+      setSelectedWordIds(next)
+
+      if (next.length === 0) {
+        openComposer(lasso.end.row, lasso.end.col)
+      }
+
+      setLasso(null)
+    }
+  }
+
+  function handleSelectAll() {
+    setSelectedWordIds(words.map((word) => word.id))
+  }
+
+  function handleClearSelection() {
+    setSelectedWordIds([])
+  }
+
+  function handleDeleteSelected() {
+    if (selectedWordIds.length === 0) {
       return
     }
 
     setWords((current) =>
+      current.filter((word) => !selectedWordIds.includes(word.id))
+    )
+    setSelectedWordIds([])
+    setSaveMessage("Removed selected words from the grid.")
+  }
+
+  function handleFlipSelected() {
+    if (selectedWordIds.length !== 1) {
+      setError("Select exactly one word to flip direction.")
+      return
+    }
+
+    const selectedId = selectedWordIds[0]
+    const nextWords = words.map((word) => {
+      if (word.id !== selectedId) {
+        return word
+      }
+
+      const nextDirection: Direction =
+        word.direction === "across" ? "down" : "across"
+
+      return {
+        ...word,
+        direction: nextDirection,
+      }
+    })
+    const validationError = validateWordSet(nextWords, gridSize, gridSize)
+
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
+    setWords(nextWords)
+    setError("")
+    setSaveMessage("Flipped selected word direction.")
+  }
+
+  function handleGridSizeChange(size: (typeof FIXED_GRID_SIZES)[number]) {
+    if (size === gridSize) {
+      return
+    }
+
+    const validationError = validateWordSet(words, size, size)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
+    setGridSize(size)
+    setError("")
+    setSaveMessage(`Grid size changed to ${size}x${size}.`)
+  }
+
+  function handleUpdateMetadata(
+    wordId: string,
+    field: "clue" | "meaning",
+    value: string
+  ) {
+    setWords((current) =>
       current.map((word) =>
-        word.id === id
-          ? {
-              ...word,
-              answer,
-              clue,
-              meaning,
-            }
-          : word
+        word.id === wordId ? { ...word, [field]: value } : word
       )
     )
-    setEditingWordId(null)
-    setEditingForm({ word: "", clue: "", meaning: "" })
+  }
+
+  function handleOpenLoadDialog() {
+    setSelectedLoadDate((current) => current || scheduledDates.at(-1) || "")
     setError("")
+    setIsLoadOpen(true)
+  }
+
+  function handleLoadPuzzle() {
+    const puzzle = puzzles.find((item) => item.date === selectedLoadDate)
+
+    if (!puzzle) {
+      setError("Choose a published puzzle date to load.")
+      return
+    }
+
+    const nextSize = FIXED_GRID_SIZES.includes(puzzle.rows as 7 | 9 | 11)
+      ? (puzzle.rows as (typeof FIXED_GRID_SIZES)[number])
+      : 9
+
+    setTitle(puzzle.title)
+    setScheduledDate(puzzle.date)
+    setGridSize(nextSize)
+    setWords(createEditorWordsFromPuzzle(puzzle))
+    setSelectedWordIds([])
+    setError("")
+    setSaveMessage(
+      `Loaded ${puzzle.title} for ${puzzle.date}. Edit directly on the grid, then publish again.`
+    )
+    setIsLoadOpen(false)
   }
 
   async function handleScheduleSave() {
@@ -280,14 +516,7 @@ export function CrosswordCms({
     }
 
     if (!layout.draft || layout.across.length + layout.down.length === 0) {
-      setError("Add words before scheduling a crossword.")
-      return
-    }
-
-    if (layout.unplaced.length > 0) {
-      setError(
-        `Remove or shorten the words that do not fit within the compact ${MAX_GRID_SIZE}x${MAX_GRID_SIZE} limit before publishing.`
-      )
+      setError("Add words directly on the grid before publishing.")
       return
     }
 
@@ -302,6 +531,7 @@ export function CrosswordCms({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(puzzle),
       })
+
       const data = (await response.json()) as {
         error?: string
         puzzle?: CrosswordPuzzle
@@ -330,31 +560,6 @@ export function CrosswordCms({
     }
   }
 
-  function handleOpenLoadDialog() {
-    setSelectedLoadDate((current) => current || scheduledDates.at(-1) || "")
-    setError("")
-    setIsLoadOpen(true)
-  }
-
-  function handleLoadPuzzle() {
-    const puzzle = puzzles.find((item) => item.date === selectedLoadDate)
-
-    if (!puzzle) {
-      setError("Choose a published puzzle date to load.")
-      return
-    }
-
-    setTitle(puzzle.title)
-    setScheduledDate(puzzle.date)
-    setWords(createBuilderWordsFromPuzzle(puzzle))
-    setError("")
-    setSaveMessage(
-      `Loaded ${puzzle.title} for ${puzzle.date}. Edit it, then publish again to save the update.`
-    )
-    setActiveTab("add-word")
-    setIsLoadOpen(false)
-  }
-
   return (
     <main className="min-h-screen bg-[#f4efe6] px-4 py-6 text-[#1e2b20] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -365,26 +570,20 @@ export function CrosswordCms({
                 Crossword Puzzle Builder
               </p>
               <h1 className="mt-2 text-3xl font-semibold tracking-[-0.03em]">
-                Build, load, and update crossword puzzles.
+                Build directly on the crossword grid.
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-[#5f675f]">
-                Every time you add or remove a word, the builder recomputes the
-                most compact crossword layout it can fit into 7x7, 9x9, or 11x11
-                and renumbers the clue list.
-              </p>
-              <p className="mt-2 text-sm leading-6 text-[#5f675f]">
-                Use Add Word to shape the board, then switch to Publish Puzzle
-                to schedule a new puzzle or update one that is already live.
+                Click on the grid to add words, lasso-select one or many
+                entries, then drag them together.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2 text-sm text-[#5f675f]">
               <div className="rounded-full bg-[#eef1e8] px-4 py-2">
-                {words.length} word{words.length === 1 ? "" : "s"}
+                {words.length} words
               </div>
               <div className="rounded-full bg-[#eef1e8] px-4 py-2">
-                {puzzles.length} saved puzzle
-                {puzzles.length === 1 ? "" : "s"}
+                {gridSize}x{gridSize} grid
               </div>
               <div className="rounded-full bg-[#eef1e8] px-4 py-2">
                 {databaseConnected ? "Database connected" : "Database offline"}
@@ -396,236 +595,83 @@ export function CrosswordCms({
         <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
           <section className="space-y-6">
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList className="h-auto w-full rounded-2xl bg-[#f3eee5] p-1">
-                  <TabsTrigger
-                    value="add-word"
-                    className="rounded-[18px] px-4 py-2 text-sm data-active:bg-white"
+              <h2 className="text-lg font-semibold">Publish puzzle</h2>
+
+              <div className="mt-4 space-y-4">
+                <label className="grid gap-2 text-sm">
+                  <span className="font-medium text-[#455045]">
+                    Puzzle title
+                  </span>
+                  <input
+                    value={title}
+                    onChange={(event) => setTitle(event.target.value)}
+                    placeholder="Weekend Crossword"
+                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                  />
+                </label>
+
+                <label className="grid gap-2 text-sm">
+                  <span className="font-medium text-[#455045]">
+                    Publish date
+                  </span>
+                  <input
+                    type="date"
+                    value={scheduledDate}
+                    onChange={(event) => setScheduledDate(event.target.value)}
+                    className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
+                  />
+                </label>
+
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-[#455045]">
+                    Grid size
+                  </span>
+                  <div className="flex gap-2">
+                    {FIXED_GRID_SIZES.map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => handleGridSizeChange(size)}
+                        className={
+                          size === gridSize
+                            ? "rounded-full border border-[#8f7f5b] bg-[#8f7f5b] px-3 py-1.5 text-xs font-semibold text-white"
+                            : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
+                        }
+                      >
+                        {size}x{size}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
+                  {hasScheduledDate
+                    ? `A puzzle is already scheduled for ${scheduledDate}. Publishing will replace it.`
+                    : scheduledDate
+                      ? `No puzzle is scheduled for ${scheduledDate} yet.`
+                      : "Choose a date to publish this puzzle."}
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={handleOpenLoadDialog}
+                    disabled={puzzles.length === 0}
+                    className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045] transition hover:border-[#bdb4a6] hover:text-[#1f2a22] disabled:cursor-not-allowed disabled:border-[#e1dbcf] disabled:text-[#a39b8e]"
                   >
-                    Add Word
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="publish"
-                    className="rounded-[18px] px-4 py-2 text-sm data-active:bg-white"
+                    Load Puzzle
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleScheduleSave}
+                    disabled={isSaving || !databaseConnected}
+                    className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
                   >
-                    Publish Puzzle
-                  </TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="add-word" className="mt-5">
-                  <h2 className="text-lg font-semibold">Add word</h2>
-                  <form className="mt-4 space-y-4" onSubmit={handleAddWord}>
-                    <label className="grid gap-2 text-sm">
-                      <span className="font-medium text-[#455045]">
-                        Puzzle title
-                      </span>
-                      <input
-                        value={title}
-                        onChange={(event) => setTitle(event.target.value)}
-                        placeholder="Weekend Crossword"
-                        className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
-                      />
-                    </label>
-
-                    <label className="grid gap-2 text-sm">
-                      <span className="font-medium text-[#455045]">Word</span>
-                      <input
-                        value={form.word}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            word: event.target.value,
-                          }))
-                        }
-                        placeholder="MARKET"
-                        className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 uppercase transition outline-none focus:border-[#8f7f5b]"
-                      />
-
-                      {wordCompatibility.tone !== "neutral" ? (
-                        <div className="space-y-2" aria-live="polite">
-                          <div
-                            className={
-                              wordCompatibility.tone === "green"
-                                ? "inline-flex items-center gap-2 rounded-full bg-[#e8f3e3] px-3 py-1.5 text-xs font-medium text-[#305235]"
-                                : wordCompatibility.tone === "yellow"
-                                  ? "inline-flex items-center gap-2 rounded-full bg-[#fff4da] px-3 py-1.5 text-xs font-medium text-[#8a6420]"
-                                  : "inline-flex items-center gap-2 rounded-full bg-[#fde8e1] px-3 py-1.5 text-xs font-medium text-[#9b4a34]"
-                            }
-                          >
-                            {wordCompatibility.tone === "green" ? (
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                            ) : wordCompatibility.tone === "yellow" ? (
-                              <TriangleAlert className="h-3.5 w-3.5" />
-                            ) : (
-                              <CircleX className="h-3.5 w-3.5" />
-                            )}
-                            <span>{wordCompatibility.message}</span>
-                          </div>
-
-                          {wordCompatibility.bonusWord ? (
-                            <div className="rounded-2xl border border-[#eedbcc] bg-[#fcf5ee] px-3 py-2 text-xs leading-5 text-[#7d5239]">
-                              Bonus word suggestion:{" "}
-                              <span className="font-semibold tracking-[0.08em] uppercase">
-                                {wordCompatibility.bonusWord}
-                              </span>
-                              . Add it first to keep the current words and
-                              create a new crossing path.
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </label>
-
-                    <label className="grid gap-2 text-sm">
-                      <span className="font-medium text-[#455045]">
-                        Clue / hint
-                      </span>
-                      <textarea
-                        rows={3}
-                        value={form.clue}
-                        disabled={!clueIsEnabled}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            clue: event.target.value,
-                          }))
-                        }
-                        placeholder={
-                          clueIsEnabled
-                            ? "Weekend bargain stop"
-                            : "Enter at least 3 letters to unlock the clue field"
-                        }
-                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b] disabled:cursor-not-allowed disabled:border-[#e8e1d4] disabled:bg-[#f3eee5] disabled:text-[#998f7d]"
-                      />
-                    </label>
-
-                    <label className="grid gap-2 text-sm">
-                      <span className="font-medium text-[#455045]">
-                        Meaning
-                      </span>
-                      <textarea
-                        rows={3}
-                        value={form.meaning}
-                        disabled={!clueIsEnabled}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            meaning: event.target.value,
-                          }))
-                        }
-                        placeholder={
-                          clueIsEnabled
-                            ? "A place where people buy and sell goods"
-                            : "Enter at least 3 letters to unlock the meaning field"
-                        }
-                        className="resize-none rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b] disabled:cursor-not-allowed disabled:border-[#e8e1d4] disabled:bg-[#f3eee5] disabled:text-[#998f7d]"
-                      />
-                    </label>
-
-                    <button
-                      type="submit"
-                      className="inline-flex items-center gap-2 rounded-full bg-[#28352b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f2a22]"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add Word
-                    </button>
-                  </form>
-                </TabsContent>
-
-                <TabsContent value="publish" className="mt-5 space-y-5">
-                  <div>
-                    <h2 className="text-lg font-semibold">Publish puzzle</h2>
-                    <p className="mt-2 text-sm leading-6 text-[#5f675f]">
-                      Pick a date, then publish the current board. If that date
-                      already has a puzzle, publishing will replace it.
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
-                    <div className="font-medium text-[#243026]">
-                      {title.trim() || "Untitled Puzzle"}
-                    </div>
-                    <div className="mt-1">
-                      {words.length} word{words.length === 1 ? "" : "s"} in the
-                      current builder.
-                    </div>
-                  </div>
-
-                  <label className="grid gap-2 text-sm">
-                    <span className="font-medium text-[#455045]">
-                      Publish date
-                    </span>
-                    <input
-                      type="date"
-                      value={scheduledDate}
-                      onChange={(event) => setScheduledDate(event.target.value)}
-                      className="rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 transition outline-none focus:border-[#8f7f5b]"
-                    />
-                  </label>
-
-                  <div className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4 text-sm text-[#5f675f]">
-                    {hasScheduledDate
-                      ? `A puzzle is already scheduled for ${scheduledDate}. Publishing will replace it.`
-                      : scheduledDate
-                        ? `No puzzle is scheduled for ${scheduledDate} yet.`
-                        : "Choose a date to publish this puzzle."}
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
-                        Scheduled dates
-                      </h3>
-                      <span className="text-xs text-[#7a7468]">
-                        {scheduledDates.length} total
-                      </span>
-                    </div>
-
-                    {scheduledDates.length === 0 ? (
-                      <div className="rounded-2xl bg-[#f6f3ec] px-4 py-4 text-sm text-[#6a7268]">
-                        No scheduled dates yet.
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {scheduledDates.map((date) => (
-                          <button
-                            key={date}
-                            type="button"
-                            onClick={() => setScheduledDate(date)}
-                            className={
-                              date === scheduledDate
-                                ? "rounded-full border border-[#8f7f5b] bg-[#8f7f5b] px-3 py-1.5 text-xs font-semibold text-white"
-                                : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f] transition hover:border-[#b6aa90] hover:text-[#2a332a]"
-                            }
-                          >
-                            {date}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={handleOpenLoadDialog}
-                      disabled={puzzles.length === 0}
-                      className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045] transition hover:border-[#bdb4a6] hover:text-[#1f2a22] disabled:cursor-not-allowed disabled:border-[#e1dbcf] disabled:text-[#a39b8e]"
-                    >
-                      Load Puzzle
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleScheduleSave}
-                      disabled={isSaving || !databaseConnected}
-                      className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
-                    >
-                      {isSaving ? "Publishing..." : "Publish Puzzle"}
-                    </button>
-                  </div>
-                </TabsContent>
-              </Tabs>
+                    {isSaving ? "Publishing..." : "Publish Puzzle"}
+                  </button>
+                </div>
+              </div>
 
               {error ? (
                 <div className="mt-4 rounded-2xl border border-[#e2c8b7] bg-[#fff5ef] px-4 py-3 text-sm text-[#91563a]">
@@ -639,140 +685,53 @@ export function CrosswordCms({
             </section>
 
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold">Words</h2>
-                <span className="text-sm text-[#5f675f]">
-                  {words.length} total
-                </span>
+              <h2 className="text-lg font-semibold">Selection controls</h2>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleSelectAll}
+                  className="rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearSelection}
+                  className="rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFlipSelected}
+                  className="inline-flex items-center gap-1 rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  Flip
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteSelected}
+                  className="inline-flex items-center gap-1 rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </button>
               </div>
 
-              <div className="mt-4 space-y-3">
-                {words.length === 0 ? (
-                  <div className="rounded-2xl bg-[#f6f3ec] px-4 py-5 text-sm text-[#6a7268]">
-                    Add your first word, clue, and meaning to generate the
-                    crossword.
-                  </div>
-                ) : (
-                  words.map((word) => (
-                    <div
-                      key={word.id}
-                      className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0 flex-1">
-                          {editingWordId === word.id ? (
-                            <div className="space-y-3">
-                              <input
-                                value={editingForm.word}
-                                onChange={(event) =>
-                                  setEditingForm((current) => ({
-                                    ...current,
-                                    word: event.target.value,
-                                  }))
-                                }
-                                placeholder="MARKET"
-                                className="w-full rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm uppercase transition outline-none focus:border-[#8f7f5b]"
-                              />
-                              <textarea
-                                rows={3}
-                                value={editingForm.clue}
-                                onChange={(event) =>
-                                  setEditingForm((current) => ({
-                                    ...current,
-                                    clue: event.target.value,
-                                  }))
-                                }
-                                placeholder="Weekend bargain stop"
-                                className="w-full resize-none rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm transition outline-none focus:border-[#8f7f5b]"
-                              />
-                              <textarea
-                                rows={3}
-                                value={editingForm.meaning}
-                                onChange={(event) =>
-                                  setEditingForm((current) => ({
-                                    ...current,
-                                    meaning: event.target.value,
-                                  }))
-                                }
-                                placeholder="A place where people buy and sell goods"
-                                className="w-full resize-none rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm transition outline-none focus:border-[#8f7f5b]"
-                              />
-                            </div>
-                          ) : (
-                            <>
-                              <div className="text-sm font-semibold tracking-[0.08em] text-[#243026] uppercase">
-                                {word.answer}
-                              </div>
-                              <div className="mt-2 text-sm leading-6 text-[#5f675f]">
-                                {word.clue}
-                              </div>
-                              <div className="mt-2 text-sm leading-6 text-[#5f675f]">
-                                <span className="font-semibold text-[#243026]">
-                                  Meaning:
-                                </span>{" "}
-                                {word.meaning}
-                              </div>
-                            </>
-                          )}
-                        </div>
-
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                          {editingWordId === word.id ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveWordEdit(word.id)}
-                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#c5d7c1] bg-[#e8f3e3] text-[#305235] transition hover:border-[#a8c29f] hover:bg-[#dcedd6]"
-                                aria-label={`Save ${word.answer}`}
-                              >
-                                <Check className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleCancelEditingWord}
-                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#e2c8b7] bg-[#fff5ef] text-[#91563a] transition hover:border-[#d9b29a] hover:bg-[#fde9de]"
-                                aria-label={`Cancel editing ${word.answer}`}
-                              >
-                                <CircleX className="h-4 w-4" />
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleStartEditingWord(word)}
-                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
-                                aria-label={`Edit ${word.answer}`}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteWord(word.id)}
-                                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
-                                aria-label={`Delete ${word.answer}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="mt-3 text-xs text-[#6a7268]">
+                {selectedWordIds.length} selected. Drag selected words to move
+                them together.
               </div>
             </section>
           </section>
 
           <section className="space-y-6">
             <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold">Grid preview</h2>
                 <div className="text-sm text-[#5f675f]">
-                  {layout.cells.length === 0
-                    ? "No grid yet"
-                    : `${layout.cells.length} rows x ${layout.cells[0].length} cols`}
+                  {gridSize} rows x {gridSize} cols
                 </div>
               </div>
 
@@ -780,50 +739,46 @@ export function CrosswordCms({
                 {layout.recommendationLabel}
               </div>
 
-              {layout.unplaced.length > 0 ? (
-                <div className="mt-4 rounded-2xl border border-[#e2c8b7] bg-[#fff5ef] px-4 py-3 text-sm text-[#91563a]">
-                  Could not place:{" "}
-                  {layout.unplaced.map((word) => word.answer).join(", ")}
-                  <div className="mt-3 space-y-2 text-xs leading-5 text-[#7d5239]">
-                    {layout.unplaced.map((word) =>
-                      word.bonusWord ? (
-                        <div key={`${word.id}-bonus`}>
-                          Add bonus word{" "}
-                          <span className="font-semibold tracking-[0.08em] uppercase">
-                            {word.bonusWord}
-                          </span>{" "}
-                          to help fit{" "}
-                          <span className="font-semibold tracking-[0.08em] uppercase">
-                            {word.answer}
-                          </span>{" "}
-                          without dropping the current set.
-                        </div>
-                      ) : null
-                    )}
-                  </div>
-                </div>
-              ) : null}
-
               <div className="mt-5 flex justify-center">
-                {layout.cells.length === 0 ? (
-                  <div className="flex min-h-[280px] items-center justify-center rounded-[24px] bg-[#f6f3ec] text-sm text-[#6a7268]">
-                    The crossword grid appears here after you add words.
-                  </div>
-                ) : (
-                  <div
-                    className="grid aspect-square w-full max-w-[540px] gap-[3px] rounded-[24px] bg-[#2b362c] p-3"
-                    style={{
-                      gridTemplateColumns: `repeat(${layout.cells[0].length}, minmax(0, 1fr))`,
-                    }}
-                  >
-                    {layout.cells.flatMap((row, rowIndex) =>
-                      row.map((cell, colIndex) => (
+                <div
+                  className="grid aspect-square w-full max-w-[540px] gap-[3px] rounded-[24px] bg-[#2b362c] p-3"
+                  style={{
+                    gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+                  }}
+                  onMouseUp={finishPointerAction}
+                  onMouseLeave={finishPointerAction}
+                >
+                  {layout.cells.flatMap((row, rowIndex) =>
+                    row.map((cell, colIndex) => {
+                      const cellKey = keyFor(rowIndex, colIndex)
+                      const inSelection = selectedCellKeys.has(cellKey)
+                      const inLasso = lasso
+                        ? pointIsInRect(
+                            { row: rowIndex, col: colIndex },
+                            lasso.start,
+                            lasso.end
+                          )
+                        : false
+
+                      return (
                         <div
-                          key={`${rowIndex}-${colIndex}`}
+                          key={cellKey}
+                          onMouseDown={(event) =>
+                            handleCellMouseDown(rowIndex, colIndex, event)
+                          }
+                          onMouseEnter={() =>
+                            handleCellMouseEnter(rowIndex, colIndex)
+                          }
                           className={
                             cell.filled
-                              ? "relative flex aspect-square items-center justify-center rounded-[8px] bg-white text-base font-semibold text-[#1f2a22]"
-                              : "aspect-square rounded-[8px] bg-[#202820]"
+                              ? `relative flex aspect-square items-center justify-center rounded-[8px] text-base font-semibold text-[#1f2a22] ${
+                                  inSelection || previewSelection.has(cellKey)
+                                    ? "bg-[#fff3cc]"
+                                    : inLasso
+                                      ? "bg-[#f3ead7]"
+                                      : "bg-white"
+                                }`
+                              : `aspect-square rounded-[8px] ${inLasso ? "bg-[#445045]" : "bg-[#202820]"}`
                           }
                         >
                           {cell.filled ? (
@@ -837,56 +792,94 @@ export function CrosswordCms({
                             </>
                           ) : null}
                         </div>
-                      ))
-                    )}
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+
+              {composer.open ? (
+                <div className="mt-4 rounded-2xl border border-[#d8d1c4] bg-[#faf8f3] p-4">
+                  <div className="text-xs tracking-[0.12em] text-[#6a7268] uppercase">
+                    Add word at row {composer.row + 1}, col {composer.col + 1}
                   </div>
-                )}
-              </div>
-            </section>
-
-            <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold">Clues</h2>
-              <div className="mt-5 grid gap-6 lg:grid-cols-2">
-                <ClueColumn title="Across" items={layout.across} />
-                <ClueColumn title="Down" items={layout.down} />
-              </div>
-            </section>
-
-            <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold">Schedule</h2>
-                <span className="text-sm text-[#5f675f]">
-                  {puzzles.length} saved
-                </span>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                {puzzles.length === 0 ? (
-                  <div className="rounded-2xl bg-[#f6f3ec] px-4 py-5 text-sm text-[#6a7268]">
-                    No scheduled crosswords yet.
-                  </div>
-                ) : (
-                  puzzles.map((puzzle) => (
-                    <div
-                      key={puzzle.id}
-                      className="rounded-2xl border border-[#e2ddd2] bg-[#faf8f3] px-4 py-4"
+                  <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <input
+                      value={composer.answer}
+                      onChange={(event) =>
+                        setComposer((current) => ({
+                          ...current,
+                          answer: event.target.value,
+                        }))
+                      }
+                      placeholder="Type a word"
+                      className="rounded-2xl border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm uppercase outline-none focus:border-[#8f7f5b]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setComposer((current) => ({
+                          ...current,
+                          direction:
+                            current.direction === "across" ? "down" : "across",
+                        }))
+                      }
+                      className="rounded-full border border-[#d8d1c4] bg-white px-3 py-2 text-xs font-semibold text-[#5f675f]"
                     >
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <div className="text-sm font-semibold text-[#243026]">
-                            {puzzle.title}
-                          </div>
-                          <div className="mt-1 text-sm text-[#5f675f]">
-                            {puzzle.date}
-                          </div>
-                        </div>
-                        <div className="text-xs tracking-[0.16em] text-[#81877d] uppercase">
-                          {puzzle.clues.length} clues
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
+                      {composer.direction}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleComposerSave}
+                      className="rounded-full bg-[#28352b] px-4 py-2 text-xs font-semibold text-white"
+                    >
+                      Add to Grid
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closeComposer}
+                      className="rounded-full border border-[#d8d1c4] bg-white px-4 py-2 text-xs font-semibold text-[#5f675f]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold">Across / Down</h2>
+              <div className="mt-5 grid gap-6 lg:grid-cols-2">
+                <EditableClueColumn
+                  title="Across"
+                  items={layout.across}
+                  onChange={handleUpdateMetadata}
+                  onDeleteWord={(wordId) => {
+                    setWords((current) =>
+                      current.filter((word) => word.id !== wordId)
+                    )
+                    setSelectedWordIds((current) =>
+                      current.filter((id) => id !== wordId)
+                    )
+                    setSaveMessage("Removed word from the grid.")
+                  }}
+                />
+                <EditableClueColumn
+                  title="Down"
+                  items={layout.down}
+                  onChange={handleUpdateMetadata}
+                  onDeleteWord={(wordId) => {
+                    setWords((current) =>
+                      current.filter((word) => word.id !== wordId)
+                    )
+                    setSelectedWordIds((current) =>
+                      current.filter((id) => id !== wordId)
+                    )
+                    setSaveMessage("Removed word from the grid.")
+                  }}
+                />
               </div>
             </section>
           </section>
@@ -904,7 +897,7 @@ export function CrosswordCms({
             </DialogTitle>
             <DialogDescription className="text-sm leading-6 text-[#5f675f]">
               Pick a published date, load that puzzle into the builder, then
-              edit and publish it again to save the fix.
+              edit and publish it again.
             </DialogDescription>
           </DialogHeader>
 
@@ -933,7 +926,7 @@ export function CrosswordCms({
                       className={
                         date === selectedLoadDate
                           ? "rounded-full border border-[#8f7f5b] bg-[#8f7f5b] px-3 py-1.5 text-xs font-semibold text-white"
-                          : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f] transition hover:border-[#b6aa90] hover:text-[#2a332a]"
+                          : "rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#5f675f]"
                       }
                     >
                       {date}
@@ -948,7 +941,7 @@ export function CrosswordCms({
             <button
               type="button"
               onClick={() => setIsLoadOpen(false)}
-              className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045] transition hover:border-[#bdb4a6] hover:text-[#1f2a22]"
+              className="inline-flex items-center justify-center rounded-full border border-[#d6d0c3] bg-white px-4 py-2.5 text-sm font-semibold text-[#445045]"
             >
               Cancel
             </button>
@@ -957,7 +950,7 @@ export function CrosswordCms({
               type="button"
               onClick={handleLoadPuzzle}
               disabled={!selectedLoadDate}
-              className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#7c6e4f] disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
+              className="inline-flex items-center justify-center rounded-full bg-[#8f7f5b] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-[#b7ae9e]"
             >
               Load Puzzle
             </button>
@@ -968,7 +961,17 @@ export function CrosswordCms({
   )
 }
 
-function ClueColumn({ title, items }: { title: string; items: ClueItem[] }) {
+function EditableClueColumn({
+  title,
+  items,
+  onChange,
+  onDeleteWord,
+}: {
+  title: string
+  items: ClueItem[]
+  onChange: (wordId: string, field: "clue" | "meaning", value: string) => void
+  onDeleteWord: (wordId: string) => void
+}) {
   return (
     <div className="rounded-[24px] bg-[#f6f3ec] p-4">
       <h3 className="text-sm font-semibold tracking-[0.22em] text-[#5d675c] uppercase">
@@ -978,17 +981,42 @@ function ClueColumn({ title, items }: { title: string; items: ClueItem[] }) {
       <div className="mt-4 space-y-3">
         {items.length === 0 ? (
           <div className="text-sm text-[#6a7268]">
-            No {title.toLowerCase()} clues yet.
+            No {title.toLowerCase()} entries yet.
           </div>
         ) : (
           items.map((item) => (
             <div key={item.id} className="rounded-2xl bg-white px-4 py-3">
-              <div className="text-sm font-semibold text-[#243026]">
-                {item.number}. {item.clue}
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-[#243026]">
+                  {item.number}. {item.answer}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onDeleteWord(item.sourceWordId)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#ddd7cb] bg-white text-[#6f675c] transition hover:border-[#c4bcaf] hover:text-[#2a332a]"
+                  aria-label={`Delete ${item.answer}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <div className="mt-1 text-xs tracking-[0.16em] text-[#81877d] uppercase">
-                {item.answer.length} letters
-              </div>
+              <textarea
+                rows={2}
+                value={item.clue}
+                onChange={(event) =>
+                  onChange(item.sourceWordId, "clue", event.target.value)
+                }
+                placeholder="Clue / hint"
+                className="mt-2 w-full resize-none rounded-xl border border-[#d6d0c3] bg-[#faf8f3] px-3 py-2 text-sm outline-none focus:border-[#8f7f5b]"
+              />
+              <textarea
+                rows={2}
+                value={item.meaning}
+                onChange={(event) =>
+                  onChange(item.sourceWordId, "meaning", event.target.value)
+                }
+                placeholder="Meaning"
+                className="mt-2 w-full resize-none rounded-xl border border-[#d6d0c3] bg-[#faf8f3] px-3 py-2 text-sm outline-none focus:border-[#8f7f5b]"
+              />
             </div>
           ))
         )}
@@ -997,49 +1025,84 @@ function ClueColumn({ title, items }: { title: string; items: ClueItem[] }) {
   )
 }
 
-function buildCrosswordLayout(
-  words: BuilderWord[],
-  title: string,
+function buildEditorLayout({
+  words,
+  rows,
+  cols,
+  title,
+  date,
+}: {
+  words: EditorWord[]
+  rows: number
+  cols: number
+  title: string
   date: string
-): LayoutResult {
+}): LayoutResult {
   if (words.length === 0) {
     return {
       draft: null,
-      cells: [],
+      cells: Array.from({ length: rows }, () =>
+        Array.from({ length: cols }, () => ({
+          letter: "",
+          number: null,
+          filled: false,
+        }))
+      ),
       across: [],
       down: [],
-      unplaced: [],
-      recommendationLabel: "Add a few words to generate a compact grid.",
+      recommendationLabel: "Click any cell to add your first word.",
     }
   }
 
-  const result = generateCompactDraftFromWordList({
-    words: words.map((word) => ({ answer: word.answer, clue: word.clue })),
+  const placementResult = buildDraftFromManualPlacements({
+    placements: words.map(toManualPlacement),
+    rows,
+    cols,
     title,
     date,
   })
-  const derivedWords = deriveWordsFromDraft(result.draft)
+
+  if (!placementResult.draft) {
+    return {
+      draft: null,
+      cells: Array.from({ length: rows }, () =>
+        Array.from({ length: cols }, () => ({
+          letter: "",
+          number: null,
+          filled: false,
+        }))
+      ),
+      across: [],
+      down: [],
+      recommendationLabel:
+        placementResult.error ?? "Fix invalid placements to continue.",
+    }
+  }
+
+  const derivedWords = deriveWordsFromDraft(placementResult.draft)
+  const sourceByAnswer = new Map(words.map((word) => [word.answer, word]))
   const startNumbers = new Map<string, number>()
 
   derivedWords.forEach((word) => {
     startNumbers.set(keyFor(word.row, word.col), word.number)
   })
 
-  const cells = result.draft.cells.map((row, rowIndex) =>
+  const cells = placementResult.draft.cells.map((row, rowIndex) =>
     row.map((cell, colIndex) => ({
       letter: cell.letter,
       number: startNumbers.get(keyFor(rowIndex, colIndex)) ?? null,
       filled: !cell.isBlock,
     }))
   )
-  const clues = derivedWords.map((word) => {
-    const sourceWord = words.find((item) => item.answer === word.answer)
 
+  const clues: ClueItem[] = derivedWords.map((word) => {
+    const source = sourceByAnswer.get(word.answer)
     return {
       id: word.id,
+      sourceWordId: source?.id ?? "",
       number: word.number,
-      clue: word.clue,
-      meaning: sourceWord?.meaning ?? "",
+      clue: source?.clue ?? "",
+      meaning: source?.meaning ?? "",
       answer: word.answer,
       row: word.row,
       col: word.col,
@@ -1048,82 +1111,83 @@ function buildCrosswordLayout(
   })
 
   return {
-    draft: result.draft,
+    draft: placementResult.draft,
     cells,
     across: clues.filter((clue) => clue.direction === "across"),
     down: clues.filter((clue) => clue.direction === "down"),
-    unplaced: result.unplacedWords.map((word, index) => ({
-      id: `unplaced-${index}-${word.answer}`,
-      answer: word.answer,
-      clue: word.clue ?? "",
-      meaning: words.find((item) => item.answer === word.answer)?.meaning ?? "",
-      bonusWord:
-        suggestBonusWord({
-          words: words.map((item) => ({
-            answer: item.answer,
-            clue: item.clue,
-          })),
-          answer: word.answer,
-          targetAlreadyIncluded: true,
-        })?.answer ?? null,
-    })),
-    recommendationLabel: result.recommendation.label,
+    recommendationLabel:
+      "Lasso any cells to select words. Drag selected words to move them.",
   }
 }
 
-function buildWordCompatibilityStatus(
-  preview: ReturnType<typeof previewWordPlacement>,
-  isFirstWord: boolean,
-  bonusSuggestion: ReturnType<typeof suggestBonusWord>
-): WordCompatibilityStatus {
-  if (preview.status === "neutral") {
-    return { tone: "neutral", message: "", bonusWord: null }
-  }
-
-  if (preview.status === "connected") {
-    if (isFirstWord) {
-      return {
-        tone: "green",
-        message: "Great! First word always fits",
-        bonusWord: null,
-      }
-    }
-
-    return {
-      tone: "green",
-      message: `Great! Intersects with ${preview.connectedWordCount} existing word${preview.connectedWordCount === 1 ? "" : "s"}`,
-      bonusWord: null,
-    }
-  }
-
-  if (preview.status === "separate") {
-    return {
-      tone: "yellow",
-      message: "Will be placed separately (no intersections found)",
-      bonusWord: null,
-    }
-  }
-
+function toManualPlacement(word: EditorWord): ManualWordPlacement {
   return {
-    tone: "red",
-    message: bonusSuggestion?.answer
-      ? `Doesn't fit yet. Try ${bonusSuggestion.answer} to bridge the gap.`
-      : "Doesn't fit yet, but you can still add it.",
-    bonusWord: bonusSuggestion?.answer ?? null,
+    id: word.id,
+    answer: word.answer,
+    row: word.row,
+    col: word.col,
+    direction: word.direction,
   }
+}
+
+function validateWordSet(
+  words: EditorWord[],
+  rows: number,
+  cols: number
+): string | null {
+  const answers = new Set<string>()
+
+  for (const word of words) {
+    if (answers.has(word.answer)) {
+      return "Every answer must be unique."
+    }
+    answers.add(word.answer)
+  }
+
+  const placements = words.map(toManualPlacement)
+
+  for (const word of words) {
+    const validation = validateManualWordPlacement({
+      rows,
+      cols,
+      placements,
+      candidate: toManualPlacement(word),
+    })
+
+    if (!validation.valid) {
+      return validation.reason ?? `Invalid placement for ${word.answer}.`
+    }
+  }
+
+  return null
 }
 
 function normalizeAnswer(value: string) {
   return value.toUpperCase().replace(/[^A-Z]/g, "")
 }
 
-function createWordId() {
-  const id = `word-${nextWordId}`
-  nextWordId += 1
-  return id
+function wordCells(word: EditorWord) {
+  return word.answer.split("").map((_, index) => ({
+    row: word.row + (word.direction === "down" ? index : 0),
+    col: word.col + (word.direction === "across" ? index : 0),
+  }))
 }
 
-function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
+function pointIsInRect(point: CellPoint, start: CellPoint, end: CellPoint) {
+  const minRow = Math.min(start.row, end.row)
+  const maxRow = Math.max(start.row, end.row)
+  const minCol = Math.min(start.col, end.col)
+  const maxCol = Math.max(start.col, end.col)
+
+  return (
+    point.row >= minRow &&
+    point.row <= maxRow &&
+    point.col >= minCol &&
+    point.col <= maxCol
+  )
+}
+
+function createEditorWordsFromPuzzle(puzzle: CrosswordPuzzle): EditorWord[] {
   return [...puzzle.clues]
     .sort((left, right) => {
       if (left.number !== right.number) {
@@ -1137,6 +1201,9 @@ function createBuilderWordsFromPuzzle(puzzle: CrosswordPuzzle) {
       answer: normalizeAnswer(clue.answer),
       clue: clue.clue,
       meaning: clue.meaning?.trim() || "",
+      row: clue.row,
+      col: clue.col,
+      direction: clue.direction,
     }))
 }
 
@@ -1181,4 +1248,10 @@ function createPuzzleId(title: string, date: string) {
     .replace(/(^-|-$)/g, "")
 
   return `${slug || "crossword"}-${date}`
+}
+
+function createWordId() {
+  const id = `word-${nextWordId}`
+  nextWordId += 1
+  return id
 }
