@@ -74,6 +74,13 @@ type DerivedLayout = {
   words: DerivedWord[]
 }
 
+type HoverPreview = {
+  answer: string
+  words: EditorWord[]
+  unlockedSuggestionCount: number
+  rearrangesExistingWords: boolean
+}
+
 type DragState = {
   wordIds: string[]
   startX: number
@@ -117,6 +124,9 @@ export function CrosswordCms({
   const [customWord, setCustomWord] = useState("")
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [selectedWordIds, setSelectedWordIds] = useState<string[]>([])
+  const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(
+    null
+  )
   const [suggestionPool, setSuggestionPool] = useState<SuggestionWord[]>([])
   const [suggestionPoolKey, setSuggestionPoolKey] = useState("")
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false)
@@ -194,6 +204,83 @@ export function CrosswordCms({
     () => buildDerivedLayout(session, boundaryOffset),
     [boundaryOffset, session]
   )
+
+  const hoverPreview = useMemo<HoverPreview | null>(() => {
+    if (!hoveredSuggestion) {
+      return null
+    }
+
+    const nextWords = [
+      ...session.words,
+      {
+        id: `hover-${hoveredSuggestion}`,
+        answer: hoveredSuggestion,
+        clue: "",
+        meaning: "",
+        row: boundaryOffset,
+        col: boundaryOffset,
+        direction: "across" as const,
+        source: "suggested" as const,
+      },
+    ]
+
+    const autoplaced = autoPlaceWords({
+      words: nextWords,
+      gridSize: session.gridSize,
+      title: session.title,
+      date: session.date,
+      shuffleSeed: session.shuffleSeed,
+    })
+
+    if (!autoplaced) {
+      return null
+    }
+
+    const nextSelectedAnswers = new Set(autoplaced.map((word) => word.answer))
+    const nextSeedWords = autoplaced.map((word) => ({ answer: word.answer }))
+    const nextAvailableSuggestions = allSuggestions.filter((suggestion) => {
+      if (nextSelectedAnswers.has(suggestion.answer)) {
+        return false
+      }
+
+      return (
+        previewWordPlacement({
+          words: nextSeedWords,
+          answer: suggestion.answer,
+        }).status === "connected"
+      )
+    })
+
+    const currentWordMap = new Map(
+      session.words.map((word) => [word.answer, word])
+    )
+    const rearrangesExistingWords = autoplaced.some((word) => {
+      const currentWord = currentWordMap.get(word.answer)
+
+      return Boolean(
+        currentWord &&
+        (currentWord.row !== word.row ||
+          currentWord.col !== word.col ||
+          currentWord.direction !== word.direction)
+      )
+    })
+
+    return {
+      answer: hoveredSuggestion,
+      words: autoplaced,
+      unlockedSuggestionCount: nextAvailableSuggestions.length,
+      rearrangesExistingWords,
+    }
+  }, [
+    allSuggestions,
+    boundaryOffset,
+    hoveredSuggestion,
+    session.date,
+    session.gridSize,
+    session.shuffleSeed,
+    session.title,
+    session.words,
+  ])
 
   const acrossWords = derivedLayout?.words.filter(
     (word) => word.direction === "across"
@@ -714,10 +801,12 @@ export function CrosswordCms({
             wordIssues={wordIssues}
             customWord={customWord}
             selectedWordIds={selectedWordIds}
+            hoverPreview={hoverPreview}
             boardRef={boardRef}
             onBack={() => setScreen("details")}
             onCustomWordChange={setCustomWord}
             onAddSuggestion={handleSuggestionAdd}
+            onSuggestionHoverChange={setHoveredSuggestion}
             onRemoveWord={handleWordRemove}
             onShuffle={handleShuffle}
             onToggleDirection={handleToggleDirection}
@@ -1074,10 +1163,12 @@ function WordEditorScreen({
   wordIssues,
   customWord,
   selectedWordIds,
+  hoverPreview,
   boardRef,
   onBack,
   onCustomWordChange,
   onAddSuggestion,
+  onSuggestionHoverChange,
   onRemoveWord,
   onShuffle,
   onToggleDirection,
@@ -1097,10 +1188,12 @@ function WordEditorScreen({
   wordIssues: Map<string, string[]>
   customWord: string
   selectedWordIds: string[]
+  hoverPreview: HoverPreview | null
   boardRef: React.RefObject<HTMLDivElement | null>
   onBack: () => void
   onCustomWordChange: (value: string) => void
   onAddSuggestion: (answer: string, source: "suggested" | "custom") => void
+  onSuggestionHoverChange: (answer: string | null) => void
   onRemoveWord: (wordId: string) => void
   onShuffle: () => void
   onToggleDirection: (wordId: string) => void
@@ -1328,6 +1421,12 @@ function WordEditorScreen({
                     <button
                       key={suggestion.answer}
                       type="button"
+                      onMouseEnter={() =>
+                        onSuggestionHoverChange(suggestion.answer)
+                      }
+                      onMouseLeave={() => onSuggestionHoverChange(null)}
+                      onFocus={() => onSuggestionHoverChange(suggestion.answer)}
+                      onBlur={() => onSuggestionHoverChange(null)}
                       onClick={() =>
                         onAddSuggestion(suggestion.answer, "suggested")
                       }
@@ -1966,6 +2065,14 @@ function autoPlaceWords({
 
 function buildDerivedLayout(session: PuzzleSession, boundaryOffset: number) {
   if (session.words.length === 0) {
+    return null
+  }
+
+  if (
+    session.words.some((word) =>
+      isOutOfBounds(word, session.gridSize, boundaryOffset)
+    )
+  ) {
     return null
   }
 
