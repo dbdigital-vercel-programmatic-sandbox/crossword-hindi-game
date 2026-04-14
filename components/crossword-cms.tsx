@@ -210,6 +210,10 @@ export function CrosswordCms({
       return null
     }
 
+    if (selectedAnswers.has(hoveredSuggestion)) {
+      return null
+    }
+
     const nextWords = [
       ...session.words,
       {
@@ -275,12 +279,91 @@ export function CrosswordCms({
     allSuggestions,
     boundaryOffset,
     hoveredSuggestion,
+    selectedAnswers,
     session.date,
     session.gridSize,
     session.shuffleSeed,
     session.title,
     session.words,
   ])
+
+  const suggestionUnlockedCounts = useMemo(() => {
+    if (screen !== "words") {
+      return new Map<string, number>()
+    }
+
+    const counts = new Map<string, number>()
+
+    availableSuggestions.forEach((suggestion) => {
+      const nextWords = [
+        ...session.words,
+        {
+          id: `count-${suggestion.answer}`,
+          answer: suggestion.answer,
+          clue: "",
+          meaning: "",
+          row: boundaryOffset,
+          col: boundaryOffset,
+          direction: "across" as const,
+          source: "suggested" as const,
+        },
+      ]
+
+      const autoplaced = autoPlaceWords({
+        words: nextWords,
+        gridSize: session.gridSize,
+        title: session.title,
+        date: session.date,
+        shuffleSeed: session.shuffleSeed,
+      })
+
+      if (!autoplaced) {
+        counts.set(suggestion.answer, 0)
+        return
+      }
+
+      const nextSelectedAnswers = new Set(autoplaced.map((word) => word.answer))
+      const nextSeedWords = autoplaced.map((word) => ({ answer: word.answer }))
+      const nextAvailableSuggestions = allSuggestions.filter(
+        (nextSuggestion) => {
+          if (nextSelectedAnswers.has(nextSuggestion.answer)) {
+            return false
+          }
+
+          return (
+            previewWordPlacement({
+              words: nextSeedWords,
+              answer: nextSuggestion.answer,
+            }).status === "connected"
+          )
+        }
+      )
+
+      counts.set(suggestion.answer, nextAvailableSuggestions.length)
+    })
+
+    return counts
+  }, [
+    allSuggestions,
+    availableSuggestions,
+    boundaryOffset,
+    screen,
+    session.date,
+    session.gridSize,
+    session.shuffleSeed,
+    session.title,
+    session.words,
+  ])
+
+  useEffect(() => {
+    if (!hoveredSuggestion) {
+      return
+    }
+
+    if (selectedAnswers.has(hoveredSuggestion)) {
+      setHoveredSuggestion(null)
+    }
+  }, [hoveredSuggestion, selectedAnswers])
 
   const acrossWords = derivedLayout?.words.filter(
     (word) => word.direction === "across"
@@ -466,28 +549,26 @@ export function CrosswordCms({
     setScreen("clues")
   }
 
-  function handleDetailsSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-
-    if (!session.theme.trim()) {
+  function handleDetailsSubmit(nextSession: PuzzleSession) {
+    if (!nextSession.theme.trim()) {
       setError("Add a theme before continuing.")
       return
     }
 
-    if (!session.title.trim()) {
+    if (!nextSession.title.trim()) {
       setError("Add a puzzle name before continuing.")
       return
     }
 
-    if (!session.date) {
+    if (!nextSession.date) {
       setError("Choose a publish date.")
       return
     }
 
     const suggestions = buildSuggestions({
-      theme: session.theme,
-      title: session.title,
-      difficulty: session.difficulty,
+      theme: nextSession.theme,
+      title: nextSession.title,
+      difficulty: nextSession.difficulty,
     })
     const recommended = recommendGridSize(
       suggestions
@@ -495,17 +576,17 @@ export function CrosswordCms({
         .map((suggestion) => ({ answer: suggestion.answer }))
     )
     const nextGridSize = FIXED_GRID_SIZES.includes(
-      recommended.rows as 7 | 9 | 11
+      recommended.rows as (typeof FIXED_GRID_SIZES)[number]
     )
-      ? (recommended.rows as (typeof FIXED_GRID_SIZES)[number])
+      ? recommended.rows
       : 9
 
-    setSession((current) => ({
-      ...current,
+    setSession({
+      ...nextSession,
       gridSize: nextGridSize,
       words: [],
       shuffleSeed: 0,
-    }))
+    })
     setCustomWord("")
     setError("")
     setNotice(
@@ -569,6 +650,7 @@ export function CrosswordCms({
 
     setSession((current) => ({ ...current, words: autoplaced }))
     setSelectedWordIds([])
+    setHoveredSuggestion(null)
     setError("")
     setNotice(`${normalized} added to the crossword.`)
     setCustomWord("")
@@ -785,7 +867,6 @@ export function CrosswordCms({
           <PuzzleDetailsForm
             session={session}
             onBack={() => setScreen("list")}
-            onChange={setSession}
             onSubmit={handleDetailsSubmit}
           />
         ) : null}
@@ -802,6 +883,7 @@ export function CrosswordCms({
             customWord={customWord}
             selectedWordIds={selectedWordIds}
             hoverPreview={hoverPreview}
+            suggestionUnlockedCounts={suggestionUnlockedCounts}
             boardRef={boardRef}
             onBack={() => setScreen("details")}
             onCustomWordChange={setCustomWord}
@@ -1020,17 +1102,24 @@ function ProjectListing({
 function PuzzleDetailsForm({
   session,
   onBack,
-  onChange,
   onSubmit,
 }: {
   session: PuzzleSession
   onBack: () => void
-  onChange: React.Dispatch<React.SetStateAction<PuzzleSession>>
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+  onSubmit: (session: PuzzleSession) => void
 }) {
+  const [draft, setDraft] = useState(session)
+
+  useEffect(() => {
+    setDraft(session)
+  }, [session])
+
   return (
     <form
-      onSubmit={onSubmit}
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit(draft)
+      }}
       className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]"
     >
       <section className="rounded-[28px] border border-[#d8d1c4] bg-white p-6 shadow-sm">
@@ -1055,9 +1144,9 @@ function PuzzleDetailsForm({
           <label className="grid gap-2 text-sm">
             <span className="font-medium text-[#455045]">Theme</span>
             <input
-              value={session.theme}
+              value={draft.theme}
               onChange={(event) =>
-                onChange((current) => ({
+                setDraft((current) => ({
                   ...current,
                   theme: event.target.value,
                 }))
@@ -1070,9 +1159,9 @@ function PuzzleDetailsForm({
           <label className="grid gap-2 text-sm">
             <span className="font-medium text-[#455045]">Puzzle name</span>
             <input
-              value={session.title}
+              value={draft.title}
               onChange={(event) =>
-                onChange((current) => ({
+                setDraft((current) => ({
                   ...current,
                   title: event.target.value,
                 }))
@@ -1086,9 +1175,9 @@ function PuzzleDetailsForm({
             <label className="grid gap-2 text-sm">
               <span className="font-medium text-[#455045]">Difficulty</span>
               <select
-                value={session.difficulty}
+                value={draft.difficulty}
                 onChange={(event) =>
-                  onChange((current) => ({
+                  setDraft((current) => ({
                     ...current,
                     difficulty: event.target.value as Difficulty,
                   }))
@@ -1111,9 +1200,9 @@ function PuzzleDetailsForm({
               <span className="font-medium text-[#455045]">Publish date</span>
               <input
                 type="date"
-                value={session.date}
+                value={draft.date}
                 onChange={(event) =>
-                  onChange((current) => ({
+                  setDraft((current) => ({
                     ...current,
                     date: event.target.value,
                   }))
@@ -1164,6 +1253,7 @@ function WordEditorScreen({
   customWord,
   selectedWordIds,
   hoverPreview,
+  suggestionUnlockedCounts,
   boardRef,
   onBack,
   onCustomWordChange,
@@ -1189,6 +1279,7 @@ function WordEditorScreen({
   customWord: string
   selectedWordIds: string[]
   hoverPreview: HoverPreview | null
+  suggestionUnlockedCounts: Map<string, number>
   boardRef: React.RefObject<HTMLDivElement | null>
   onBack: () => void
   onCustomWordChange: (value: string) => void
@@ -1431,9 +1522,16 @@ function WordEditorScreen({
                       onClick={() =>
                         onAddSuggestion(suggestion.answer, "suggested")
                       }
-                      className="rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#445045]"
+                      className={
+                        hoverPreview?.answer === suggestion.answer
+                          ? "inline-flex items-center gap-2 rounded-full border border-[#8eb1d3] bg-[#f7fbff] px-3 py-1.5 text-xs font-semibold text-[#2d4b63]"
+                          : "inline-flex items-center gap-2 rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#445045]"
+                      }
                     >
-                      {suggestion.answer}
+                      <span>{suggestion.answer}</span>
+                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-[#ffcfa7] px-1.5 text-[11px] font-semibold text-[#4d2c11]">
+                        {suggestionUnlockedCounts.get(suggestion.answer) ?? 0}
+                      </span>
                     </button>
                   ))
                 )}
@@ -1533,15 +1631,6 @@ function WordEditorScreen({
           </div>
         </div>
 
-        {hoverPreview ? (
-          <div className="mt-4 rounded-2xl border border-[#d8d1c4] bg-[#f6f3ec] px-4 py-3 text-sm text-[#445045]">
-            {hoverPreview.answer} would leave{" "}
-            {hoverPreview.unlockedSuggestionCount} more connected suggestion
-            {hoverPreview.unlockedSuggestionCount === 1 ? "" : "s"} available
-            after selection.
-          </div>
-        ) : null}
-
         <div className="mt-5 flex justify-center">
           <div className="w-full max-w-[760px]">
             <div
@@ -1638,7 +1727,9 @@ function WordEditorScreen({
                 const issues = wordIssues.get(word.id) ?? []
                 const isInvalid = issues.length > 0
                 const isSelected = selectedWordIds.includes(word.id)
-                const isPreviewWord = word.id.startsWith("hover-")
+                const isPreviewWord = Boolean(
+                  hoverPreview && word.answer === hoverPreview.answer
+                )
                 const tileLength = word.answer.length
                 const width = word.direction === "across" ? tileLength : 1
                 const height = word.direction === "down" ? tileLength : 1
