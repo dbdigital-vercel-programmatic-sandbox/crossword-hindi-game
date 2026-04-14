@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useState } from "react"
 import {
   ArrowLeft,
   Calendar,
@@ -86,6 +86,12 @@ type DragState = {
   startX: number
   startY: number
   positions: Record<string, { row: number; col: number }>
+  deltaRow: number
+  deltaCol: number
+  minDeltaRow: number
+  maxDeltaRow: number
+  minDeltaCol: number
+  maxDeltaCol: number
 }
 
 type LassoState = {
@@ -122,7 +128,6 @@ export function CrosswordCms({
   )
   const [isPublishing, setIsPublishing] = useState(false)
   const [customWord, setCustomWord] = useState("")
-  const [dragState, setDragState] = useState<DragState | null>(null)
   const [selectedWordIds, setSelectedWordIds] = useState<string[]>([])
   const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(
     null
@@ -134,8 +139,6 @@ export function CrosswordCms({
   const [suggestionEngine, setSuggestionEngine] = useState<"dictionary" | "ai">(
     "dictionary"
   )
-
-  const boardRef = useRef<HTMLDivElement | null>(null)
 
   const boundaryOffset = useMemo(
     () => getBoundaryOffset(session.gridSize),
@@ -441,91 +444,6 @@ export function CrosswordCms({
     session.words,
     suggestionRequestKey,
   ])
-
-  useEffect(() => {
-    if (!dragState) {
-      return
-    }
-
-    const currentDrag = dragState
-
-    function handlePointerMove(event: PointerEvent) {
-      const board = boardRef.current
-      if (!board) {
-        return
-      }
-
-      const rect = board.getBoundingClientRect()
-      const cellSize = rect.width / CANVAS_SIZE
-      const deltaCol = Math.round(
-        (event.clientX - currentDrag.startX) / cellSize
-      )
-      const deltaRow = Math.round(
-        (event.clientY - currentDrag.startY) / cellSize
-      )
-
-      setSession((current) => {
-        const dragWords = current.words.filter((word) =>
-          currentDrag.wordIds.includes(word.id)
-        )
-
-        if (dragWords.length === 0) {
-          return current
-        }
-
-        const minRow = Math.min(...dragWords.map((word) => word.row))
-        const minCol = Math.min(...dragWords.map((word) => word.col))
-        const maxRow = Math.max(
-          ...dragWords.map(
-            (word) =>
-              word.row +
-              (word.direction === "down" ? word.answer.length - 1 : 0)
-          )
-        )
-        const maxCol = Math.max(
-          ...dragWords.map(
-            (word) =>
-              word.col +
-              (word.direction === "across" ? word.answer.length - 1 : 0)
-          )
-        )
-
-        const clampedDeltaRow = Math.max(
-          -minRow,
-          Math.min(CANVAS_SIZE - 1 - maxRow, deltaRow)
-        )
-        const clampedDeltaCol = Math.max(
-          -minCol,
-          Math.min(CANVAS_SIZE - 1 - maxCol, deltaCol)
-        )
-
-        return {
-          ...current,
-          words: current.words.map((word) =>
-            currentDrag.wordIds.includes(word.id)
-              ? {
-                  ...word,
-                  row: currentDrag.positions[word.id].row + clampedDeltaRow,
-                  col: currentDrag.positions[word.id].col + clampedDeltaCol,
-                }
-              : word
-          ),
-        }
-      })
-    }
-
-    function handlePointerUp() {
-      setDragState(null)
-    }
-
-    window.addEventListener("pointermove", handlePointerMove)
-    window.addEventListener("pointerup", handlePointerUp)
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove)
-      window.removeEventListener("pointerup", handlePointerUp)
-    }
-  }, [dragState])
 
   function resetMessages() {
     setError("")
@@ -884,7 +802,6 @@ export function CrosswordCms({
             selectedWordIds={selectedWordIds}
             hoverPreview={hoverPreview}
             suggestionUnlockedCounts={suggestionUnlockedCounts}
-            boardRef={boardRef}
             onBack={() => setScreen("details")}
             onCustomWordChange={setCustomWord}
             onAddSuggestion={handleSuggestionAdd}
@@ -897,7 +814,20 @@ export function CrosswordCms({
             }
             onClearWordSelection={() => setSelectedWordIds([])}
             onSelectWords={setSelectedWordIds}
-            onPointerDown={setDragState}
+            onMoveWords={(wordIds, positions, deltaRow, deltaCol) => {
+              setSession((current) => ({
+                ...current,
+                words: current.words.map((word) =>
+                  wordIds.includes(word.id)
+                    ? {
+                        ...word,
+                        row: positions[word.id].row + deltaRow,
+                        col: positions[word.id].col + deltaCol,
+                      }
+                    : word
+                ),
+              }))
+            }}
             onSaveLayout={handleSaveWordLayout}
             onGridSizeChange={(gridSize) => {
               setSession((current) => ({ ...current, gridSize }))
@@ -1254,7 +1184,6 @@ function WordEditorScreen({
   selectedWordIds,
   hoverPreview,
   suggestionUnlockedCounts,
-  boardRef,
   onBack,
   onCustomWordChange,
   onAddSuggestion,
@@ -1265,7 +1194,7 @@ function WordEditorScreen({
   onSelectAllWords,
   onClearWordSelection,
   onSelectWords,
-  onPointerDown,
+  onMoveWords,
   onSaveLayout,
   onGridSizeChange,
 }: {
@@ -1280,7 +1209,6 @@ function WordEditorScreen({
   selectedWordIds: string[]
   hoverPreview: HoverPreview | null
   suggestionUnlockedCounts: Map<string, number>
-  boardRef: React.RefObject<HTMLDivElement | null>
   onBack: () => void
   onCustomWordChange: (value: string) => void
   onAddSuggestion: (answer: string, source: "suggested" | "custom") => void
@@ -1291,76 +1219,18 @@ function WordEditorScreen({
   onSelectAllWords: () => void
   onClearWordSelection: () => void
   onSelectWords: (wordIds: string[]) => void
-  onPointerDown: React.Dispatch<React.SetStateAction<DragState | null>>
+  onMoveWords: (
+    wordIds: string[],
+    positions: Record<string, { row: number; col: number }>,
+    deltaRow: number,
+    deltaCol: number
+  ) => void
   onSaveLayout: () => void
   onGridSizeChange: (gridSize: number) => void
 }) {
-  const [lassoState, setLassoState] = useState<LassoState | null>(null)
   const selectedCount = selectedWordIds.length
   const allWordsSelected =
     session.words.length > 0 && selectedWordIds.length === session.words.length
-
-  useEffect(() => {
-    if (!lassoState) {
-      return
-    }
-
-    function handlePointerMove(event: PointerEvent) {
-      const board = boardRef.current
-      if (!board) {
-        return
-      }
-
-      const rect = board.getBoundingClientRect()
-      setLassoState((current) =>
-        current
-          ? {
-              ...current,
-              currentX: clampToRange(event.clientX - rect.left, 0, rect.width),
-              currentY: clampToRange(event.clientY - rect.top, 0, rect.height),
-            }
-          : current
-      )
-    }
-
-    function handlePointerUp() {
-      const currentLasso = lassoState
-      if (!currentLasso) {
-        return
-      }
-
-      const board = boardRef.current
-      if (!board) {
-        setLassoState(null)
-        return
-      }
-
-      const rect = board.getBoundingClientRect()
-      const wordIds = session.words
-        .filter((word) => wordIntersectsLasso(word, currentLasso, rect.width))
-        .map((word) => word.id)
-
-      setLassoState(null)
-
-      if (wordIds.length === 0) {
-        onClearWordSelection()
-        return
-      }
-
-      onSelectWords(wordIds)
-    }
-
-    window.addEventListener("pointermove", handlePointerMove)
-    window.addEventListener("pointerup", handlePointerUp)
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove)
-      window.removeEventListener("pointerup", handlePointerUp)
-    }
-  }, [boardRef, lassoState, onClearWordSelection, onSelectWords, session.words])
-
-  const lassoBounds = lassoState ? getLassoBounds(lassoState) : null
-  const previewWords = hoverPreview?.words ?? session.words
 
   return (
     <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -1632,204 +1502,373 @@ function WordEditorScreen({
         </div>
 
         <div className="mt-5 flex justify-center">
-          <div className="w-full max-w-[760px]">
-            <div
-              ref={boardRef}
-              onPointerDown={(event) => {
-                if (!(event.target instanceof Element)) {
-                  return
-                }
-
-                if (event.target.closest("[data-word-tile='true']")) {
-                  return
-                }
-
-                const rect = event.currentTarget.getBoundingClientRect()
-                setLassoState({
-                  startX: clampToRange(
-                    event.clientX - rect.left,
-                    0,
-                    rect.width
-                  ),
-                  startY: clampToRange(
-                    event.clientY - rect.top,
-                    0,
-                    rect.height
-                  ),
-                  currentX: clampToRange(
-                    event.clientX - rect.left,
-                    0,
-                    rect.width
-                  ),
-                  currentY: clampToRange(
-                    event.clientY - rect.top,
-                    0,
-                    rect.height
-                  ),
-                })
-              }}
-              className="relative aspect-square w-full overflow-hidden rounded-[28px] border border-[#d8d1c4] bg-[#f6f3ec]"
-            >
-              <div
-                className="grid h-full w-full gap-[2px] bg-[#ddd6c8] p-3"
-                style={{
-                  gridTemplateColumns: `repeat(${CANVAS_SIZE}, minmax(0, 1fr))`,
-                }}
-              >
-                {Array.from(
-                  { length: CANVAS_SIZE * CANVAS_SIZE },
-                  (_, index) => {
-                    const row = Math.floor(index / CANVAS_SIZE)
-                    const col = index % CANVAS_SIZE
-                    const insideBoundary =
-                      row >= boundaryOffset &&
-                      row < boundaryOffset + session.gridSize &&
-                      col >= boundaryOffset &&
-                      col < boundaryOffset + session.gridSize
-
-                    return (
-                      <div
-                        key={keyFor(row, col)}
-                        className={
-                          insideBoundary
-                            ? "rounded-[6px] bg-white"
-                            : "rounded-[6px] bg-[#efe7d7]"
-                        }
-                      />
-                    )
-                  }
-                )}
-              </div>
-
-              <div
-                className="pointer-events-none absolute border-2 border-dashed border-[#8f7f5b]/70"
-                style={{
-                  left: `${(boundaryOffset / CANVAS_SIZE) * 100}%`,
-                  top: `${(boundaryOffset / CANVAS_SIZE) * 100}%`,
-                  width: `${(session.gridSize / CANVAS_SIZE) * 100}%`,
-                  height: `${(session.gridSize / CANVAS_SIZE) * 100}%`,
-                }}
-              />
-
-              {lassoBounds ? (
-                <div
-                  className="pointer-events-none absolute rounded-[12px] border border-[#8f7f5b] bg-[#8f7f5b]/10"
-                  style={{
-                    left: lassoBounds.left,
-                    top: lassoBounds.top,
-                    width: lassoBounds.width,
-                    height: lassoBounds.height,
-                  }}
-                />
-              ) : null}
-
-              {previewWords.map((word) => {
-                const issues = wordIssues.get(word.id) ?? []
-                const isInvalid = issues.length > 0
-                const isSelected = selectedWordIds.includes(word.id)
-                const isPreviewWord = Boolean(
-                  hoverPreview && word.answer === hoverPreview.answer
-                )
-                const tileLength = word.answer.length
-                const width = word.direction === "across" ? tileLength : 1
-                const height = word.direction === "down" ? tileLength : 1
-
-                return (
-                  <div
-                    key={word.id}
-                    className="absolute"
-                    style={{
-                      left: `${(word.col / CANVAS_SIZE) * 100}%`,
-                      top: `${(word.row / CANVAS_SIZE) * 100}%`,
-                      width: `${(width / CANVAS_SIZE) * 100}%`,
-                      height: `${(height / CANVAS_SIZE) * 100}%`,
-                    }}
-                  >
-                    <button
-                      data-word-tile="true"
-                      type="button"
-                      disabled={isPreviewWord}
-                      onPointerDown={(event) => {
-                        event.preventDefault()
-                        const activeWordIds = isSelected
-                          ? selectedWordIds
-                          : [word.id]
-                        onPointerDown({
-                          wordIds: activeWordIds,
-                          startX: event.clientX,
-                          startY: event.clientY,
-                          positions: Object.fromEntries(
-                            session.words
-                              .filter((item) => activeWordIds.includes(item.id))
-                              .map((item) => [
-                                item.id,
-                                { row: item.row, col: item.col },
-                              ])
-                          ),
-                        })
-                      }}
-                      className={
-                        isPreviewWord
-                          ? "group relative flex h-full w-full rounded-[14px] bg-[#eef7ff] opacity-85 shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#6c99c7] select-none"
-                          : isInvalid
-                            ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fff0eb] shadow-[0_10px_22px_rgba(70,34,20,0.14)] select-none active:cursor-grabbing"
-                            : isSelected
-                              ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fffaf0] shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#8f7f5b] select-none active:cursor-grabbing"
-                              : "group relative flex h-full w-full cursor-grab rounded-[14px] bg-white shadow-[0_10px_22px_rgba(29,44,35,0.12)] select-none active:cursor-grabbing"
-                      }
-                    >
-                      <div
-                        className={
-                          word.direction === "across"
-                            ? "grid h-full w-full gap-[2px] p-[3px]"
-                            : "grid h-full w-full gap-[2px] p-[3px]"
-                        }
-                        style={{
-                          gridTemplateColumns:
-                            word.direction === "across"
-                              ? `repeat(${tileLength}, minmax(0, 1fr))`
-                              : "repeat(1, minmax(0, 1fr))",
-                          gridTemplateRows:
-                            word.direction === "down"
-                              ? `repeat(${tileLength}, minmax(0, 1fr))`
-                              : "repeat(1, minmax(0, 1fr))",
-                        }}
-                      >
-                        {word.answer.split("").map((letter, index) => (
-                          <span
-                            key={`${word.id}-${index}`}
-                            className={
-                              isPreviewWord
-                                ? "flex items-center justify-center rounded-[10px] border border-[#b9d2e6] bg-[#f6fbff] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#28557b]"
-                                : isInvalid
-                                  ? "flex items-center justify-center rounded-[10px] border border-[#efcabc] bg-[#fff7f3] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#8c5138]"
-                                  : "flex items-center justify-center rounded-[10px] border border-[#d8d1c4] bg-[#fffdf8] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#1f2a22]"
-                            }
-                          >
-                            {letter}
-                          </span>
-                        ))}
-                      </div>
-
-                      <span className="pointer-events-none absolute top-1 left-1 inline-flex items-center gap-1 rounded-full bg-[#28352b] px-1.5 py-0.5 text-[9px] font-semibold text-white">
-                        <GripVertical className="h-2.5 w-2.5" />
-                        {isPreviewWord
-                          ? "NEW"
-                          : word.direction === "across"
-                            ? "A"
-                            : "D"}
-                      </span>
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <WordEditorBoard
+            session={session}
+            boundaryOffset={boundaryOffset}
+            selectedWordIds={selectedWordIds}
+            wordIssues={wordIssues}
+            hoverPreview={hoverPreview}
+            onSelectWords={onSelectWords}
+            onClearWordSelection={onClearWordSelection}
+            onMoveWords={onMoveWords}
+          />
         </div>
       </section>
     </div>
   )
 }
+
+const WordEditorBoard = memo(function WordEditorBoard({
+  session,
+  boundaryOffset,
+  selectedWordIds,
+  wordIssues,
+  hoverPreview,
+  onSelectWords,
+  onClearWordSelection,
+  onMoveWords,
+}: {
+  session: PuzzleSession
+  boundaryOffset: number
+  selectedWordIds: string[]
+  wordIssues: Map<string, string[]>
+  hoverPreview: HoverPreview | null
+  onSelectWords: (wordIds: string[]) => void
+  onClearWordSelection: () => void
+  onMoveWords: (
+    wordIds: string[],
+    positions: Record<string, { row: number; col: number }>,
+    deltaRow: number,
+    deltaCol: number
+  ) => void
+}) {
+  const [boardElement, setBoardElement] = useState<HTMLDivElement | null>(null)
+  const [dragState, setDragState] = useState<DragState | null>(null)
+  const [lassoState, setLassoState] = useState<LassoState | null>(null)
+  const previewWords = hoverPreview?.words ?? session.words
+  const lassoBounds = lassoState ? getLassoBounds(lassoState) : null
+
+  useEffect(() => {
+    if (!dragState || !boardElement) {
+      return
+    }
+
+    const currentDrag = dragState
+    const currentBoard = boardElement
+
+    function handlePointerMove(event: PointerEvent) {
+      const rect = currentBoard.getBoundingClientRect()
+      const cellSize = rect.width / CANVAS_SIZE
+      const rawDeltaCol = Math.round(
+        (event.clientX - currentDrag.startX) / cellSize
+      )
+      const rawDeltaRow = Math.round(
+        (event.clientY - currentDrag.startY) / cellSize
+      )
+      const deltaCol = clampToRange(
+        rawDeltaCol,
+        currentDrag.minDeltaCol,
+        currentDrag.maxDeltaCol
+      )
+      const deltaRow = clampToRange(
+        rawDeltaRow,
+        currentDrag.minDeltaRow,
+        currentDrag.maxDeltaRow
+      )
+
+      if (
+        deltaCol === currentDrag.deltaCol &&
+        deltaRow === currentDrag.deltaRow
+      ) {
+        return
+      }
+
+      setDragState((current) =>
+        current
+          ? {
+              ...current,
+              deltaCol,
+              deltaRow,
+            }
+          : current
+      )
+    }
+
+    function handlePointerUp() {
+      onMoveWords(
+        currentDrag.wordIds,
+        currentDrag.positions,
+        currentDrag.deltaRow,
+        currentDrag.deltaCol
+      )
+      setDragState(null)
+    }
+
+    window.addEventListener("pointermove", handlePointerMove)
+    window.addEventListener("pointerup", handlePointerUp)
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+    }
+  }, [boardElement, dragState, onMoveWords])
+
+  useEffect(() => {
+    if (!lassoState || !boardElement) {
+      return
+    }
+
+    const currentLasso = lassoState
+    const currentBoard = boardElement
+
+    function handlePointerMove(event: PointerEvent) {
+      const rect = currentBoard.getBoundingClientRect()
+      setLassoState((current) =>
+        current
+          ? {
+              ...current,
+              currentX: clampToRange(event.clientX - rect.left, 0, rect.width),
+              currentY: clampToRange(event.clientY - rect.top, 0, rect.height),
+            }
+          : current
+      )
+    }
+
+    function handlePointerUp() {
+      const rect = currentBoard.getBoundingClientRect()
+      const wordIds = session.words
+        .filter((word) => wordIntersectsLasso(word, currentLasso, rect.width))
+        .map((word) => word.id)
+
+      setLassoState(null)
+
+      if (wordIds.length === 0) {
+        onClearWordSelection()
+        return
+      }
+
+      onSelectWords(wordIds)
+    }
+
+    window.addEventListener("pointermove", handlePointerMove)
+    window.addEventListener("pointerup", handlePointerUp)
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+    }
+  }, [
+    boardElement,
+    lassoState,
+    onClearWordSelection,
+    onSelectWords,
+    session.words,
+  ])
+
+  return (
+    <div className="w-full max-w-[760px]">
+      <div
+        ref={setBoardElement}
+        onPointerDown={(event) => {
+          if (!(event.target instanceof Element)) {
+            return
+          }
+
+          if (event.target.closest("[data-word-tile='true']")) {
+            return
+          }
+
+          const rect = event.currentTarget.getBoundingClientRect()
+          setLassoState({
+            startX: clampToRange(event.clientX - rect.left, 0, rect.width),
+            startY: clampToRange(event.clientY - rect.top, 0, rect.height),
+            currentX: clampToRange(event.clientX - rect.left, 0, rect.width),
+            currentY: clampToRange(event.clientY - rect.top, 0, rect.height),
+          })
+        }}
+        className="relative aspect-square w-full overflow-hidden rounded-[28px] border border-[#d8d1c4] bg-[#f6f3ec]"
+      >
+        <div
+          className="grid h-full w-full gap-[2px] bg-[#ddd6c8] p-3"
+          style={{
+            gridTemplateColumns: `repeat(${CANVAS_SIZE}, minmax(0, 1fr))`,
+          }}
+        >
+          {Array.from({ length: CANVAS_SIZE * CANVAS_SIZE }, (_, index) => {
+            const row = Math.floor(index / CANVAS_SIZE)
+            const col = index % CANVAS_SIZE
+            const insideBoundary =
+              row >= boundaryOffset &&
+              row < boundaryOffset + session.gridSize &&
+              col >= boundaryOffset &&
+              col < boundaryOffset + session.gridSize
+
+            return (
+              <div
+                key={keyFor(row, col)}
+                className={
+                  insideBoundary
+                    ? "rounded-[6px] bg-white"
+                    : "rounded-[6px] bg-[#efe7d7]"
+                }
+              />
+            )
+          })}
+        </div>
+
+        <div
+          className="pointer-events-none absolute border-2 border-dashed border-[#8f7f5b]/70"
+          style={{
+            left: `${(boundaryOffset / CANVAS_SIZE) * 100}%`,
+            top: `${(boundaryOffset / CANVAS_SIZE) * 100}%`,
+            width: `${(session.gridSize / CANVAS_SIZE) * 100}%`,
+            height: `${(session.gridSize / CANVAS_SIZE) * 100}%`,
+          }}
+        />
+
+        {lassoBounds ? (
+          <div
+            className="pointer-events-none absolute rounded-[12px] border border-[#8f7f5b] bg-[#8f7f5b]/10"
+            style={{
+              left: lassoBounds.left,
+              top: lassoBounds.top,
+              width: lassoBounds.width,
+              height: lassoBounds.height,
+            }}
+          />
+        ) : null}
+
+        {previewWords.map((word) => {
+          const issues = wordIssues.get(word.id) ?? []
+          const isInvalid = issues.length > 0
+          const isSelected = selectedWordIds.includes(word.id)
+          const isPreviewWord = Boolean(
+            hoverPreview && word.answer === hoverPreview.answer
+          )
+          const tileLength = word.answer.length
+          const width = word.direction === "across" ? tileLength : 1
+          const height = word.direction === "down" ? tileLength : 1
+          const livePosition =
+            dragState && dragState.wordIds.includes(word.id)
+              ? {
+                  row: dragState.positions[word.id].row + dragState.deltaRow,
+                  col: dragState.positions[word.id].col + dragState.deltaCol,
+                }
+              : { row: word.row, col: word.col }
+
+          return (
+            <div
+              key={word.id}
+              className="absolute"
+              style={{
+                left: `${(livePosition.col / CANVAS_SIZE) * 100}%`,
+                top: `${(livePosition.row / CANVAS_SIZE) * 100}%`,
+                width: `${(width / CANVAS_SIZE) * 100}%`,
+                height: `${(height / CANVAS_SIZE) * 100}%`,
+              }}
+            >
+              <button
+                data-word-tile="true"
+                type="button"
+                disabled={isPreviewWord}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  const activeWordIds = isSelected ? selectedWordIds : [word.id]
+                  const dragWords = session.words.filter((item) =>
+                    activeWordIds.includes(item.id)
+                  )
+                  const minRow = Math.min(...dragWords.map((item) => item.row))
+                  const minCol = Math.min(...dragWords.map((item) => item.col))
+                  const maxRow = Math.max(
+                    ...dragWords.map(
+                      (item) =>
+                        item.row +
+                        (item.direction === "down" ? item.answer.length - 1 : 0)
+                    )
+                  )
+                  const maxCol = Math.max(
+                    ...dragWords.map(
+                      (item) =>
+                        item.col +
+                        (item.direction === "across"
+                          ? item.answer.length - 1
+                          : 0)
+                    )
+                  )
+
+                  setDragState({
+                    wordIds: activeWordIds,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    positions: Object.fromEntries(
+                      dragWords.map((item) => [
+                        item.id,
+                        { row: item.row, col: item.col },
+                      ])
+                    ),
+                    deltaRow: 0,
+                    deltaCol: 0,
+                    minDeltaRow: -minRow,
+                    maxDeltaRow: CANVAS_SIZE - 1 - maxRow,
+                    minDeltaCol: -minCol,
+                    maxDeltaCol: CANVAS_SIZE - 1 - maxCol,
+                  })
+                }}
+                className={
+                  isPreviewWord
+                    ? "group relative flex h-full w-full rounded-[14px] bg-[#eef7ff] opacity-85 shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#6c99c7] select-none"
+                    : isInvalid
+                      ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fff0eb] shadow-[0_10px_22px_rgba(70,34,20,0.14)] select-none active:cursor-grabbing"
+                      : isSelected
+                        ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fffaf0] shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#8f7f5b] select-none active:cursor-grabbing"
+                        : "group relative flex h-full w-full cursor-grab rounded-[14px] bg-white shadow-[0_10px_22px_rgba(29,44,35,0.12)] select-none active:cursor-grabbing"
+                }
+              >
+                <div
+                  className="grid h-full w-full gap-[2px] p-[3px]"
+                  style={{
+                    gridTemplateColumns:
+                      word.direction === "across"
+                        ? `repeat(${tileLength}, minmax(0, 1fr))`
+                        : "repeat(1, minmax(0, 1fr))",
+                    gridTemplateRows:
+                      word.direction === "down"
+                        ? `repeat(${tileLength}, minmax(0, 1fr))`
+                        : "repeat(1, minmax(0, 1fr))",
+                  }}
+                >
+                  {word.answer.split("").map((letter, index) => (
+                    <span
+                      key={`${word.id}-${index}`}
+                      className={
+                        isPreviewWord
+                          ? "flex items-center justify-center rounded-[10px] border border-[#b9d2e6] bg-[#f6fbff] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#28557b]"
+                          : isInvalid
+                            ? "flex items-center justify-center rounded-[10px] border border-[#efcabc] bg-[#fff7f3] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#8c5138]"
+                            : "flex items-center justify-center rounded-[10px] border border-[#d8d1c4] bg-[#fffdf8] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#1f2a22]"
+                      }
+                    >
+                      {letter}
+                    </span>
+                  ))}
+                </div>
+
+                <span className="pointer-events-none absolute top-1 left-1 inline-flex items-center gap-1 rounded-full bg-[#28352b] px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                  <GripVertical className="h-2.5 w-2.5" />
+                  {isPreviewWord
+                    ? "NEW"
+                    : word.direction === "across"
+                      ? "A"
+                      : "D"}
+                </span>
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
 
 function ClueEditorScreen({
   session,
