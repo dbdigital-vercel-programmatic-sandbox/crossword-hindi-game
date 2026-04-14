@@ -31,7 +31,7 @@ export type SeedWord = {
   clue?: string
 }
 
-export const FIXED_GRID_SIZES = [7, 9, 11] as const
+export const FIXED_GRID_SIZES = [6, 7, 8, 9, 10, 11] as const
 export const MAX_GRID_SIZE = FIXED_GRID_SIZES[FIXED_GRID_SIZES.length - 1]
 
 const MIN_WORD_LENGTH = 3
@@ -251,7 +251,7 @@ export function validateCrosswordDraft(
       passed: usesFixedGridSize,
       detail: usesFixedGridSize
         ? `Using the approved ${draft.rows}x${draft.cols} square format.`
-        : "Use a fixed square grid: 7x7, 9x9, or 11x11.",
+        : "Use a fixed square grid between 6x6 and 11x11.",
       severity: "error",
     },
     {
@@ -423,10 +423,12 @@ export function generateCompactDraftFromWordList({
   words,
   title = "",
   date = getLocalDateKey(),
+  shuffleSeed,
 }: {
   words: SeedWord[]
   title?: string
   date?: string
+  shuffleSeed?: number
 }): GeneratedDraftResult {
   const recommendation = recommendGridSize(words)
 
@@ -436,6 +438,7 @@ export function generateCompactDraftFromWordList({
     cols: recommendation.cols,
     title,
     date,
+    shuffleSeed,
   })
 }
 
@@ -445,12 +448,14 @@ export function generateDraftFromWordList({
   cols,
   title = "",
   date = getLocalDateKey(),
+  shuffleSeed,
 }: {
   words: SeedWord[]
   rows: number
   cols: number
   title?: string
   date?: string
+  shuffleSeed?: number
 }): GeneratedDraftResult {
   const normalizedWords = normalizeSeedWords(words)
   const recommendation = recommendGridSize(normalizedWords)
@@ -462,6 +467,7 @@ export function generateDraftFromWordList({
     title,
     date,
     recommendation,
+    shuffleSeed,
   })
 }
 
@@ -715,6 +721,7 @@ function generateDraftWithPlacement({
   title = "",
   date = getLocalDateKey(),
   recommendation,
+  shuffleSeed,
 }: {
   words: SeedWord[]
   rows: number
@@ -722,12 +729,14 @@ function generateDraftWithPlacement({
   title?: string
   date?: string
   recommendation: GridRecommendation
+  shuffleSeed?: number
 }): GeneratedDraftResult {
   const draft = createBlockedDraft(rows, cols, title, date)
   const { board, placements, unplacedWords } = runPlacementSimulation({
     words,
     rows,
     cols,
+    shuffleSeed,
   })
 
   if (placements.length === 0) {
@@ -769,10 +778,12 @@ function runPlacementSimulation({
   words,
   rows,
   cols,
+  shuffleSeed,
 }: {
   words: SeedWord[]
   rows: number
   cols: number
+  shuffleSeed?: number
 }) {
   const maxWordLength = getMaxWordLengthForGrid(Math.max(rows, cols))
   const eligibleWords = words.filter(
@@ -793,7 +804,9 @@ function runPlacementSimulation({
   }
 
   const sortedWords = [...eligibleWords].sort(
-    (left, right) => right.answer.length - left.answer.length
+    (left, right) =>
+      right.answer.length - left.answer.length ||
+      comparePlacementOrder(left.answer, right.answer, shuffleSeed)
   )
   const unplacedWords: SeedWord[] = [...oversizedWords]
   const firstWord = sortedWords[0]
@@ -1083,7 +1096,7 @@ function pickBestGridFit(words: SeedWord[]): GridFit {
 function gridUsesFixedSquareSize(draft: CrosswordDraft) {
   return (
     draft.rows === draft.cols &&
-    FIXED_GRID_SIZES.includes(draft.rows as 7 | 9 | 11)
+    FIXED_GRID_SIZES.includes(draft.rows as (typeof FIXED_GRID_SIZES)[number])
   )
 }
 
@@ -1503,4 +1516,21 @@ function scorePlacement(placement: Placement, rows: number, cols: number) {
   const distance =
     Math.abs(placement.row - centerRow) + Math.abs(placement.col - centerCol)
   return placement.intersections * 100 - distance
+}
+
+function comparePlacementOrder(left: string, right: string, shuffleSeed = 0) {
+  return (
+    hashPlacementOrder(`${left}:${shuffleSeed}`) -
+      hashPlacementOrder(`${right}:${shuffleSeed}`) || left.localeCompare(right)
+  )
+}
+
+function hashPlacementOrder(value: string) {
+  let hash = 0
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) % 2147483647
+  }
+
+  return hash
 }

@@ -15,6 +15,8 @@ export type CrosswordPuzzle = {
   id: string
   date: string
   title: string
+  theme?: string
+  difficulty?: string
   rows: number
   cols: number
   clues: ClueDefinition[]
