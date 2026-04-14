@@ -1269,6 +1269,7 @@ function WordEditorScreen({
   }, [boardRef, lassoState, onClearWordSelection, onSelectWords, session.words])
 
   const lassoBounds = lassoState ? getLassoBounds(lassoState) : null
+  const previewWords = hoverPreview?.words ?? session.words
 
   return (
     <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -1520,13 +1521,26 @@ function WordEditorScreen({
           <div>
             <h2 className="text-lg font-semibold">Crossword preview</h2>
             <p className="mt-1 text-sm text-[#5f675f]">
-              Drag any word directly inside the preview to reposition it.
+              {hoverPreview
+                ? hoverPreview.rearrangesExistingWords
+                  ? `Hovering ${hoverPreview.answer} shows the rearranged layout if you add it.`
+                  : `Hovering ${hoverPreview.answer} shows where it would slot into the current layout.`
+                : "Drag any word directly inside the preview to reposition it."}
             </p>
           </div>
           <div className="rounded-full bg-[#eef1e8] px-3 py-1 text-xs font-semibold text-[#445045]">
             {session.gridSize}x{session.gridSize} boundary
           </div>
         </div>
+
+        {hoverPreview ? (
+          <div className="mt-4 rounded-2xl border border-[#d8d1c4] bg-[#f6f3ec] px-4 py-3 text-sm text-[#445045]">
+            {hoverPreview.answer} would leave{" "}
+            {hoverPreview.unlockedSuggestionCount} more connected suggestion
+            {hoverPreview.unlockedSuggestionCount === 1 ? "" : "s"} available
+            after selection.
+          </div>
+        ) : null}
 
         <div className="mt-5 flex justify-center">
           <div className="w-full max-w-[760px]">
@@ -1620,10 +1634,11 @@ function WordEditorScreen({
                 />
               ) : null}
 
-              {session.words.map((word) => {
+              {previewWords.map((word) => {
                 const issues = wordIssues.get(word.id) ?? []
                 const isInvalid = issues.length > 0
                 const isSelected = selectedWordIds.includes(word.id)
+                const isPreviewWord = word.id.startsWith("hover-")
                 const tileLength = word.answer.length
                 const width = word.direction === "across" ? tileLength : 1
                 const height = word.direction === "down" ? tileLength : 1
@@ -1642,6 +1657,7 @@ function WordEditorScreen({
                     <button
                       data-word-tile="true"
                       type="button"
+                      disabled={isPreviewWord}
                       onPointerDown={(event) => {
                         event.preventDefault()
                         const activeWordIds = isSelected
@@ -1662,11 +1678,13 @@ function WordEditorScreen({
                         })
                       }}
                       className={
-                        isInvalid
-                          ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fff0eb] shadow-[0_10px_22px_rgba(70,34,20,0.14)] select-none active:cursor-grabbing"
-                          : isSelected
-                            ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fffaf0] shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#8f7f5b] select-none active:cursor-grabbing"
-                            : "group relative flex h-full w-full cursor-grab rounded-[14px] bg-white shadow-[0_10px_22px_rgba(29,44,35,0.12)] select-none active:cursor-grabbing"
+                        isPreviewWord
+                          ? "group relative flex h-full w-full rounded-[14px] bg-[#eef7ff] opacity-85 shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#6c99c7] select-none"
+                          : isInvalid
+                            ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fff0eb] shadow-[0_10px_22px_rgba(70,34,20,0.14)] select-none active:cursor-grabbing"
+                            : isSelected
+                              ? "group relative flex h-full w-full cursor-grab rounded-[14px] bg-[#fffaf0] shadow-[0_10px_22px_rgba(29,44,35,0.12)] ring-2 ring-[#8f7f5b] select-none active:cursor-grabbing"
+                              : "group relative flex h-full w-full cursor-grab rounded-[14px] bg-white shadow-[0_10px_22px_rgba(29,44,35,0.12)] select-none active:cursor-grabbing"
                       }
                     >
                       <div
@@ -1690,9 +1708,11 @@ function WordEditorScreen({
                           <span
                             key={`${word.id}-${index}`}
                             className={
-                              isInvalid
-                                ? "flex items-center justify-center rounded-[10px] border border-[#efcabc] bg-[#fff7f3] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#8c5138]"
-                                : "flex items-center justify-center rounded-[10px] border border-[#d8d1c4] bg-[#fffdf8] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#1f2a22]"
+                              isPreviewWord
+                                ? "flex items-center justify-center rounded-[10px] border border-[#b9d2e6] bg-[#f6fbff] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#28557b]"
+                                : isInvalid
+                                  ? "flex items-center justify-center rounded-[10px] border border-[#efcabc] bg-[#fff7f3] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#8c5138]"
+                                  : "flex items-center justify-center rounded-[10px] border border-[#d8d1c4] bg-[#fffdf8] text-[clamp(11px,1.1vw,14px)] font-semibold text-[#1f2a22]"
                             }
                           >
                             {letter}
@@ -1702,7 +1722,11 @@ function WordEditorScreen({
 
                       <span className="pointer-events-none absolute top-1 left-1 inline-flex items-center gap-1 rounded-full bg-[#28352b] px-1.5 py-0.5 text-[9px] font-semibold text-white">
                         <GripVertical className="h-2.5 w-2.5" />
-                        {word.direction === "across" ? "A" : "D"}
+                        {isPreviewWord
+                          ? "NEW"
+                          : word.direction === "across"
+                            ? "A"
+                            : "D"}
                       </span>
                     </button>
                   </div>
@@ -1809,6 +1833,7 @@ function ClueEditorScreen({
             <CrosswordPreview
               draft={derivedLayout.draft}
               words={derivedLayout.words}
+              showClueList={false}
             />
           ) : (
             <div className="rounded-[24px] bg-[#f6f3ec] px-4 py-6 text-sm text-[#6a7268]">
