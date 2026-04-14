@@ -7,9 +7,11 @@ import {
 export function CrosswordPreview({
   draft,
   words,
+  showClueList = true,
 }: {
   draft: CrosswordDraft
   words: DerivedWord[]
+  showClueList?: boolean
 }) {
   const startNumbers = new Map<string, number>()
 
@@ -41,7 +43,13 @@ export function CrosswordPreview({
         </div>
       </div>
 
-      <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_220px]">
+      <div
+        className={
+          showClueList
+            ? "grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_220px]"
+            : "p-5"
+        }
+      >
         <div
           className="grid gap-[3px] rounded-[18px] bg-[#cad39d] p-[10px]"
           style={{
@@ -84,10 +92,12 @@ export function CrosswordPreview({
           )}
         </div>
 
-        <div className="grid gap-4 text-[#223325]">
-          <PreviewWordGroup label="Across" words={acrossWords} />
-          <PreviewWordGroup label="Down" words={downWords} />
-        </div>
+        {showClueList ? (
+          <div className="grid gap-4 text-[#223325]">
+            <PreviewWordGroup label="Across" words={acrossWords} />
+            <PreviewWordGroup label="Down" words={downWords} />
+          </div>
+        ) : null}
       </div>
     </div>
   )
