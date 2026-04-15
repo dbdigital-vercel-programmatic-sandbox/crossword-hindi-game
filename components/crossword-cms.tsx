@@ -81,6 +81,13 @@ type HoverPreview = {
   rearrangesExistingWords: boolean
 }
 
+type CustomWordOption = {
+  answer: string
+  unlockedSuggestionCount: number
+  canAdd: boolean
+  reason: string
+}
+
 type DragState = {
   wordIds: string[]
   startX: number
@@ -132,6 +139,7 @@ export function CrosswordCms({
   const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(
     null
   )
+  const [debouncedCustomWord, setDebouncedCustomWord] = useState("")
   const [suggestionPool, setSuggestionPool] = useState<SuggestionWord[]>([])
   const [suggestionPoolKey, setSuggestionPoolKey] = useState("")
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false)
@@ -351,6 +359,125 @@ export function CrosswordCms({
     availableSuggestions,
     boundaryOffset,
     screen,
+    session.date,
+    session.gridSize,
+    session.shuffleSeed,
+    session.title,
+    session.words,
+  ])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedCustomWord(customWord)
+    }, 350)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [customWord])
+
+  const customWordOptions = useMemo<CustomWordOption[]>(() => {
+    if (screen !== "words") {
+      return []
+    }
+
+    const normalized = normalizeAnswer(debouncedCustomWord)
+    if (normalized.length < 3) {
+      return []
+    }
+
+    const seedWords = session.words.map((word) => ({ answer: word.answer }))
+    const seen = new Set<string>()
+    const candidateAnswers = [
+      normalized,
+      ...allSuggestions
+        .map((suggestion) => suggestion.answer)
+        .filter((answer) => answer.startsWith(normalized)),
+      ...allSuggestions
+        .map((suggestion) => suggestion.answer)
+        .filter(
+          (answer) =>
+            !answer.startsWith(normalized) && answer.includes(normalized)
+        ),
+    ].filter((answer) => {
+      if (seen.has(answer) || selectedAnswers.has(answer)) {
+        return false
+      }
+
+      seen.add(answer)
+      return true
+    })
+
+    return candidateAnswers.slice(0, 6).map((answer) => {
+      const connects =
+        seedWords.length === 0 ||
+        previewWordPlacement({ words: seedWords, answer }).status ===
+          "connected"
+
+      if (!connects) {
+        return {
+          answer,
+          unlockedSuggestionCount: 0,
+          canAdd: false,
+          reason: "Does not connect yet",
+        }
+      }
+
+      const autoplaced = autoPlaceWords({
+        words: [
+          ...session.words,
+          {
+            id: `custom-preview-${answer}`,
+            answer,
+            clue: "",
+            meaning: "",
+            row: boundaryOffset,
+            col: boundaryOffset,
+            direction: "across" as const,
+            source: "custom" as const,
+          },
+        ],
+        gridSize: session.gridSize,
+        title: session.title,
+        date: session.date,
+        shuffleSeed: session.shuffleSeed,
+      })
+
+      if (!autoplaced) {
+        return {
+          answer,
+          unlockedSuggestionCount: 0,
+          canAdd: false,
+          reason: "Cannot place cleanly",
+        }
+      }
+
+      const nextSelectedAnswers = new Set(autoplaced.map((word) => word.answer))
+      const nextSeedWords = autoplaced.map((word) => ({ answer: word.answer }))
+      const unlockedSuggestionCount = allSuggestions.filter((suggestion) => {
+        if (nextSelectedAnswers.has(suggestion.answer)) {
+          return false
+        }
+
+        return (
+          previewWordPlacement({
+            words: nextSeedWords,
+            answer: suggestion.answer,
+          }).status === "connected"
+        )
+      }).length
+
+      return {
+        answer,
+        unlockedSuggestionCount,
+        canAdd: true,
+        reason: "",
+      }
+    })
+  }, [
+    allSuggestions,
+    boundaryOffset,
+    debouncedCustomWord,
+    screen,
+    selectedAnswers,
     session.date,
     session.gridSize,
     session.shuffleSeed,
@@ -799,6 +926,8 @@ export function CrosswordCms({
             suggestionEngine={suggestionEngine}
             wordIssues={wordIssues}
             customWord={customWord}
+            debouncedCustomWord={debouncedCustomWord}
+            customWordOptions={customWordOptions}
             selectedWordIds={selectedWordIds}
             hoverPreview={hoverPreview}
             suggestionUnlockedCounts={suggestionUnlockedCounts}
@@ -1181,6 +1310,8 @@ function WordEditorScreen({
   suggestionEngine,
   wordIssues,
   customWord,
+  debouncedCustomWord,
+  customWordOptions,
   selectedWordIds,
   hoverPreview,
   suggestionUnlockedCounts,
@@ -1206,6 +1337,8 @@ function WordEditorScreen({
   suggestionEngine: "dictionary" | "ai"
   wordIssues: Map<string, string[]>
   customWord: string
+  debouncedCustomWord: string
+  customWordOptions: CustomWordOption[]
   selectedWordIds: string[]
   hoverPreview: HoverPreview | null
   suggestionUnlockedCounts: Map<string, number>
@@ -1351,6 +1484,38 @@ function WordEditorScreen({
                   Add
                 </button>
               </div>
+              {customWord.trim() && customWord !== debouncedCustomWord ? (
+                <div className="mt-2 rounded-2xl bg-[#f6f3ec] px-4 py-3 text-xs text-[#6a7268]">
+                  Checking word strength...
+                </div>
+              ) : null}
+              {customWordOptions.length > 0 ? (
+                <div className="mt-2 overflow-hidden rounded-2xl border border-[#ddd6ca] bg-white">
+                  {customWordOptions.map((option) => (
+                    <button
+                      key={option.answer}
+                      type="button"
+                      disabled={!option.canAdd}
+                      onClick={() => onAddSuggestion(option.answer, "custom")}
+                      className="flex w-full items-center justify-between gap-3 border-b border-[#efe8dc] px-4 py-3 text-left last:border-b-0 disabled:cursor-not-allowed disabled:bg-[#faf8f3]"
+                    >
+                      <div>
+                        <div className="text-sm font-semibold text-[#243026]">
+                          {option.answer}
+                        </div>
+                        <div className="text-xs text-[#6a7268]">
+                          {option.canAdd
+                            ? "Add this word to expand the puzzle"
+                            : option.reason}
+                        </div>
+                      </div>
+                      <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-[#ffcfa7] px-2 text-xs font-semibold text-[#4d2c11]">
+                        {option.unlockedSuggestionCount}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div>
