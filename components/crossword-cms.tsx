@@ -135,6 +135,8 @@ export function CrosswordCms({
   )
   const [isPublishing, setIsPublishing] = useState(false)
   const [customWord, setCustomWord] = useState("")
+  const [suggestionGuidanceDraft, setSuggestionGuidanceDraft] = useState("")
+  const [suggestionGuidance, setSuggestionGuidance] = useState("")
   const [selectedWordIds, setSelectedWordIds] = useState<string[]>([])
   const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(
     null
@@ -166,10 +168,12 @@ export function CrosswordCms({
         title: session.title,
         difficulty: session.difficulty,
         selectedWords: session.words.map((word) => word.answer),
+        guidance: suggestionGuidance,
         refresh: suggestionRefreshNonce,
       }),
     [
       session.difficulty,
+      suggestionGuidance,
       session.theme,
       session.title,
       session.words,
@@ -519,6 +523,7 @@ export function CrosswordCms({
             title: session.title,
             difficulty: session.difficulty,
             selectedWords: session.words.map((word) => word.answer),
+            guidance: suggestionGuidance,
           }),
           signal: controller.signal,
         })
@@ -563,6 +568,7 @@ export function CrosswordCms({
   }, [
     screen,
     session.difficulty,
+    suggestionGuidance,
     session.theme,
     session.title,
     session.words,
@@ -577,6 +583,8 @@ export function CrosswordCms({
   function handleCreateNew() {
     setSession(createEmptySession())
     setCustomWord("")
+    setSuggestionGuidanceDraft("")
+    setSuggestionGuidance("")
     setSelectedWordIds([])
     resetMessages()
     setScreen("details")
@@ -585,6 +593,8 @@ export function CrosswordCms({
   function handleOpenPuzzle(puzzle: CrosswordPuzzle) {
     setSession(createSessionFromPuzzle(puzzle))
     setCustomWord("")
+    setSuggestionGuidanceDraft("")
+    setSuggestionGuidance("")
     setSelectedWordIds([])
     setError("")
     setNotice(`Editing ${puzzle.title}. Use Edit words to reshape the layout.`)
@@ -923,6 +933,8 @@ export function CrosswordCms({
             suggestionEngine={suggestionEngine}
             wordIssues={wordIssues}
             customWord={customWord}
+            suggestionGuidanceDraft={suggestionGuidanceDraft}
+            suggestionGuidance={suggestionGuidance}
             debouncedCustomWord={debouncedCustomWord}
             customWordOptions={customWordOptions}
             selectedWordIds={selectedWordIds}
@@ -930,6 +942,13 @@ export function CrosswordCms({
             suggestionUnlockedCounts={suggestionUnlockedCounts}
             onBack={() => setScreen("details")}
             onCustomWordChange={setCustomWord}
+            onSuggestionGuidanceDraftChange={setSuggestionGuidanceDraft}
+            onSubmitSuggestionGuidance={() => {
+              setSuggestionGuidance(suggestionGuidanceDraft)
+              setSuggestionPool([])
+              setSuggestionPoolKey("")
+              setSuggestionRefreshNonce((current) => current + 1)
+            }}
             onAddSuggestion={handleSuggestionAdd}
             onRefreshSuggestions={() => {
               setSuggestionPool([])
@@ -1287,8 +1306,8 @@ function PuzzleDetailsForm({
         <h3 className="text-lg font-semibold">What happens next</h3>
         <div className="mt-4 space-y-4 text-sm text-[#5f675f]">
           <div className="rounded-2xl bg-[#f6f3ec] p-4">
-            1. Suggestions come from a larger crossword dictionary, then AI
-            reranks and expands them when available.
+            1. Suggestions use theme-first AI words and only fall back to
+            dictionary words if AI is unavailable.
           </div>
           <div className="rounded-2xl bg-[#f6f3ec] p-4">
             2. Only words that connect to the current crossword remain visible.
@@ -1312,6 +1331,8 @@ function WordEditorScreen({
   suggestionEngine,
   wordIssues,
   customWord,
+  suggestionGuidanceDraft,
+  suggestionGuidance,
   debouncedCustomWord,
   customWordOptions,
   selectedWordIds,
@@ -1319,6 +1340,8 @@ function WordEditorScreen({
   suggestionUnlockedCounts,
   onBack,
   onCustomWordChange,
+  onSuggestionGuidanceDraftChange,
+  onSubmitSuggestionGuidance,
   onAddSuggestion,
   onRefreshSuggestions,
   onSuggestionHoverChange,
@@ -1340,6 +1363,8 @@ function WordEditorScreen({
   suggestionEngine: "dictionary" | "ai"
   wordIssues: Map<string, string[]>
   customWord: string
+  suggestionGuidanceDraft: string
+  suggestionGuidance: string
   debouncedCustomWord: string
   customWordOptions: CustomWordOption[]
   selectedWordIds: string[]
@@ -1347,6 +1372,8 @@ function WordEditorScreen({
   suggestionUnlockedCounts: Map<string, number>
   onBack: () => void
   onCustomWordChange: (value: string) => void
+  onSuggestionGuidanceDraftChange: (value: string) => void
+  onSubmitSuggestionGuidance: () => void
   onAddSuggestion: (answer: string, source: "suggested" | "custom") => void
   onRefreshSuggestions: () => void
   onSuggestionHoverChange: (answer: string | null) => void
@@ -1523,6 +1550,40 @@ function WordEditorScreen({
             </div>
 
             <div>
+              <label className="block">
+                <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
+                  add more description
+                </h3>
+                <textarea
+                  value={suggestionGuidanceDraft}
+                  onChange={(event) =>
+                    onSuggestionGuidanceDraftChange(event.target.value)
+                  }
+                  placeholder="Example: cinematic ocean words, spooky forest creatures, elegant music terms"
+                  rows={3}
+                  className="mt-2 w-full rounded-2xl border border-[#d6d0c3] bg-[#faf8f3] px-4 py-3 text-sm outline-none focus:border-[#8f7f5b]"
+                />
+              </label>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-xs text-[#6a7268]">
+                  Add extra words, mood, style, or subthemes, then submit to
+                  refresh the list.
+                </p>
+                <button
+                  type="button"
+                  onClick={onSubmitSuggestionGuidance}
+                  disabled={
+                    isSuggestionsLoading ||
+                    suggestionGuidanceDraft.trim() === suggestionGuidance.trim()
+                  }
+                  className="shrink-0 rounded-full bg-[#28352b] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+
+            <div>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
                   Suggested words
@@ -1545,9 +1606,9 @@ function WordEditorScreen({
                     {isSuggestionsLoading
                       ? "loading ai suggested words"
                       : suggestionEngine === "ai"
-                        ? "AI-ranked crossword builder"
+                        ? "AI theme-based suggestions"
                         : aiAvailable
-                          ? "Dictionary fallback"
+                          ? "AI failed, showing dictionary fallback"
                           : "AI not configured, using dictionary"}
                   </div>
                 </div>

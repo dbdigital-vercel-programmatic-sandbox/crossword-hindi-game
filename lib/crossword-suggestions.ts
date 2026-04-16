@@ -22,6 +22,7 @@ export type SuggestionRequest = {
   title?: string
   difficulty?: Difficulty
   selectedWords?: string[]
+  guidance?: string
 }
 
 type SuggestionInput = {
@@ -30,11 +31,14 @@ type SuggestionInput = {
   difficulty: Difficulty
   selectedWords?: string[]
   aiSuggestions?: string[]
+  guidance?: string
+  includeDictionary?: boolean
+  includeSeedSources?: boolean
 }
 
 const AI_GATEWAY_MODEL = "openai/gpt-4o-mini"
 const AI_SYSTEM_PROMPT =
-  "You are a crossword builder who suggests word based on the theme"
+  "You are an expert crossword constructor. Suggest strongly theme-matched single-word answers, favor vivid and specific entries over generic filler, and treat any user guidance as a high-priority constraint."
 
 const THEME_BANK: Record<string, string[]> = {
   animals: [
@@ -388,6 +392,57 @@ const DIFFICULTY_WORDS: Record<Difficulty, string[]> = {
   ],
 }
 
+const DOMAIN_GENERIC_WORDS: Record<string, string[]> = {
+  animals: ["ANIMAL", "BEAST", "CREATURE", "PET", "WILDLIFE"],
+  space: [
+    "ASTRO",
+    "ASTRONAUT",
+    "COSMOS",
+    "GALAXY",
+    "MOON",
+    "ORBIT",
+    "PLANET",
+    "ROCKET",
+    "SPACE",
+    "STAR",
+    "UNIVERSE",
+  ],
+  ocean: ["BEACH", "COAST", "OCEAN", "SEA", "SHORE", "WATER", "WAVE"],
+  food: ["DISH", "FLAVOR", "FOOD", "MEAL", "RECIPE", "SNACK", "TASTE"],
+  travel: [
+    "ADVENTURE",
+    "JOURNEY",
+    "ROUTE",
+    "TOUR",
+    "TRANSIT",
+    "TRAVEL",
+    "TRIP",
+    "VACATION",
+  ],
+  sports: ["ATHLETE", "GAME", "MATCH", "PLAYER", "SPORT", "TEAM"],
+  festival: [
+    "CELEBRATION",
+    "EVENT",
+    "FESTIVAL",
+    "HOLIDAY",
+    "MUSIC",
+    "PARTY",
+    "SHOW",
+  ],
+  nature: ["EARTH", "GREEN", "NATURE", "OUTDOOR", "PLANT", "TREE"],
+  music: ["MUSIC", "NOTE", "RHYTHM", "SINGER", "SONG", "SOUND", "TUNE"],
+  city: ["BLOCK", "BUILDING", "CITY", "ROAD", "STREET", "TOWN", "URBAN"],
+}
+
+const GENERIC_HINT_WORDS = new Set([
+  "BASIC",
+  "COMMON",
+  "GENERAL",
+  "GENERIC",
+  "NORMAL",
+  "STANDARD",
+])
+
 const GENERIC_CROSSWORD_WORDS = [
   "ACCENT",
   "AERIAL",
@@ -498,45 +553,66 @@ export function buildSuggestions({
   difficulty,
   selectedWords = [],
   aiSuggestions = [],
+  guidance = "",
+  includeDictionary = false,
+  includeSeedSources = true,
 }: SuggestionInput) {
   const difficultyRange = getDifficultyRange(difficulty)
-  const context = `${theme} ${title}`.toLowerCase()
+  const context = `${theme} ${title} ${guidance}`.toLowerCase()
   const selectedSet = new Set(selectedWords.map(normalizeAnswer))
   const selectedLetters = new Set(
     selectedWords.flatMap((word) => normalizeAnswer(word).split(""))
   )
+  const contextTokens = tokenizeContext(context)
+  const themeKeys = resolveThemeKeys(context)
+  const genericWords = getGenericWords(themeKeys)
   const scored = new Map<
     string,
     { suggestion: SuggestionWord; score: number }
   >()
 
-  const themeKeys = resolveThemeKeys(context)
   const sources: Array<SuggestionWord & { score: number }> = [
-    ...tokenizeToSuggestions(theme, "theme").map((item) => ({
-      ...item,
-      score: 120,
-    })),
-    ...tokenizeToSuggestions(title, "title").map((item) => ({
-      ...item,
-      score: 105,
-    })),
-    ...themeKeys.flatMap((key) =>
-      THEME_BANK[key].map((answer) => ({
-        answer,
-        source: "theme" as const,
-        score: 96,
-      }))
-    ),
-    ...DIFFICULTY_WORDS[difficulty].map((answer) => ({
-      answer,
-      source: "difficulty" as const,
-      score: 60,
-    })),
-    ...GENERIC_CROSSWORD_WORDS.map((answer) => ({
-      answer,
-      source: "dictionary" as const,
-      score: 38,
-    })),
+    ...(includeSeedSources
+      ? tokenizeToSuggestions(theme, "theme").map((item) => ({
+          ...item,
+          score: 120,
+        }))
+      : []),
+    ...(includeSeedSources
+      ? tokenizeToSuggestions(title, "title").map((item) => ({
+          ...item,
+          score: 105,
+        }))
+      : []),
+    ...(includeSeedSources
+      ? tokenizeToSuggestions(guidance, "custom").map((item) => ({
+          ...item,
+          score: 112,
+        }))
+      : []),
+    ...(includeSeedSources
+      ? themeKeys.flatMap((key) =>
+          THEME_BANK[key].map((answer) => ({
+            answer,
+            source: "theme" as const,
+            score: 96,
+          }))
+        )
+      : []),
+    ...(includeSeedSources
+      ? DIFFICULTY_WORDS[difficulty].map((answer) => ({
+          answer,
+          source: "difficulty" as const,
+          score: 60,
+        }))
+      : []),
+    ...(includeDictionary
+      ? GENERIC_CROSSWORD_WORDS.map((answer) => ({
+          answer,
+          source: "dictionary" as const,
+          score: 38,
+        }))
+      : []),
     ...aiSuggestions.map((answer) => ({
       answer,
       source: "ai" as const,
@@ -562,8 +638,26 @@ export function buildSuggestions({
     const themeScore = themeKeys.some((key) => THEME_BANK[key].includes(answer))
       ? 20
       : 0
+    const specificityScore = getSpecificityScore({
+      answer,
+      contextTokens,
+      themeKeys,
+      source: entry.source,
+    })
+    const genericPenalty = getGenericPenalty({
+      answer,
+      genericWords,
+      themeKeys,
+      source: entry.source,
+    })
     const total =
-      entry.score + overlapScore + closenessScore + titleScore + themeScore
+      entry.score +
+      overlapScore +
+      closenessScore +
+      titleScore +
+      themeScore +
+      specificityScore -
+      genericPenalty
     const existing = scored.get(answer)
 
     if (!existing || total > existing.score) {
@@ -591,40 +685,60 @@ export async function getSuggestionResponse({
   title,
   difficulty,
   selectedWords,
+  guidance,
 }: SuggestionRequest) {
   const normalizedTheme = theme?.trim() ?? ""
   const normalizedTitle = title?.trim() ?? ""
+  const normalizedGuidance = guidance?.trim() ?? ""
   const normalizedDifficulty = normalizeDifficulty(difficulty)
   const normalizedSelectedWords = Array.isArray(selectedWords)
     ? selectedWords
     : []
+
+  const aiInspirationPool = buildSuggestions({
+    theme: normalizedTheme,
+    title: normalizedTitle,
+    difficulty: normalizedDifficulty,
+    selectedWords: normalizedSelectedWords,
+    guidance: normalizedGuidance,
+  }).map((suggestion) => suggestion.answer)
 
   const dictionarySuggestions = buildSuggestions({
     theme: normalizedTheme,
     title: normalizedTitle,
     difficulty: normalizedDifficulty,
     selectedWords: normalizedSelectedWords,
+    guidance: normalizedGuidance,
+    includeDictionary: true,
   })
   const aiSuggestions = await suggestWordsWithAi({
     theme: normalizedTheme,
     title: normalizedTitle,
     difficulty: normalizedDifficulty,
     selectedWords: normalizedSelectedWords,
-    candidateWords: dictionarySuggestions.map(
-      (suggestion) => suggestion.answer
-    ),
-  })
-  const suggestions = buildSuggestions({
-    theme: normalizedTheme,
-    title: normalizedTitle,
-    difficulty: normalizedDifficulty,
-    selectedWords: normalizedSelectedWords,
-    aiSuggestions,
+    guidance: normalizedGuidance,
+    candidateWords: aiInspirationPool,
   })
 
+  if (aiSuggestions.length > 0) {
+    return {
+      suggestions: buildSuggestions({
+        theme: normalizedTheme,
+        title: normalizedTitle,
+        difficulty: normalizedDifficulty,
+        selectedWords: normalizedSelectedWords,
+        guidance: normalizedGuidance,
+        aiSuggestions,
+        includeSeedSources: false,
+      }),
+      engine: "ai" as const,
+      aiAvailable: isAiSuggestionAvailable(),
+    }
+  }
+
   return {
-    suggestions,
-    engine: aiSuggestions.length > 0 ? "ai" : "dictionary",
+    suggestions: dictionarySuggestions,
+    engine: "dictionary" as const,
     aiAvailable: isAiSuggestionAvailable(),
   }
 }
@@ -639,12 +753,14 @@ export async function suggestWordsWithAi({
   difficulty,
   selectedWords = [],
   candidateWords = [],
+  guidance = "",
 }: {
   theme: string
   title: string
   difficulty: Difficulty
   selectedWords?: string[]
   candidateWords?: string[]
+  guidance?: string
 }) {
   const apiKey = process.env.APP_BUILDER_VERCEL_AI_GATEWAY
 
@@ -661,9 +777,10 @@ export async function suggestWordsWithAi({
       system: AI_SYSTEM_PROMPT,
       prompt: JSON.stringify({
         instructions:
-          'Return JSON with a top-level "words" array. Suggest single-word uppercase answers that fit the theme, avoid repeats, avoid punctuation, and prefer entries that are likely to cross well with the existing words.',
+          'Return JSON with a top-level "words" array. Suggest single-word uppercase answers that are strongly and specifically tied to the theme and title, follow the user guidance closely, avoid generic crossword filler, and prefer named entities, acronyms, programs, locations, vehicles, instruments, or subject-specific jargon over broad category words. Generic words are allowed, but keep them to a small minority of the list. Avoid repeats, avoid punctuation, and prefer entries that are likely to cross well with the existing words.',
         theme,
         title,
+        guidance,
         difficulty,
         maxLength: MAX_GRID_SIZE,
         minLength: getDifficultyRange(difficulty).min,
@@ -711,6 +828,92 @@ function tokenizeToSuggestions(value: string, source: SuggestionSource) {
     .map((part) => normalizeAnswer(part))
     .filter((part) => part.length >= 3)
     .map((answer) => ({ answer, source }))
+}
+
+function tokenizeContext(value: string) {
+  return new Set(
+    value
+      .split(/[^A-Za-z]+/)
+      .map((part) => normalizeAnswer(part))
+      .filter((part) => part.length >= 3)
+  )
+}
+
+function getGenericWords(themeKeys: string[]) {
+  return new Set(themeKeys.flatMap((key) => DOMAIN_GENERIC_WORDS[key] ?? []))
+}
+
+function getSpecificityScore({
+  answer,
+  contextTokens,
+  themeKeys,
+  source,
+}: {
+  answer: string
+  contextTokens: Set<string>
+  themeKeys: string[]
+  source: SuggestionSource
+}) {
+  const hasThemeContext = themeKeys.length > 0 || contextTokens.size > 0
+  const looksSpecific =
+    answer.length >= 7 ||
+    /(?:YAAN|GRAM|NAV|CRAFT|SHIP|PORT|BASE|LAB|SAT)$/i.test(answer)
+  const matchesContextStem = [...contextTokens].some(
+    (token) =>
+      token.length >= 4 && (answer.includes(token) || token.includes(answer))
+  )
+
+  let score = 0
+
+  if (
+    (source === "ai" || source === "custom") &&
+    hasThemeContext &&
+    looksSpecific
+  ) {
+    score += 14
+  }
+
+  if (source === "ai" && answer.length >= 8) {
+    score += 6
+  }
+
+  if (matchesContextStem) {
+    score += 8
+  }
+
+  return score
+}
+
+function getGenericPenalty({
+  answer,
+  genericWords,
+  themeKeys,
+  source,
+}: {
+  answer: string
+  genericWords: Set<string>
+  themeKeys: string[]
+  source: SuggestionSource
+}) {
+  if (source !== "ai") {
+    return 0
+  }
+
+  let penalty = 0
+
+  if (genericWords.has(answer)) {
+    penalty += themeKeys.length > 0 ? 28 : 14
+  }
+
+  if (GENERIC_HINT_WORDS.has(answer)) {
+    penalty += 16
+  }
+
+  if (answer.length <= 5 && themeKeys.length > 0) {
+    penalty += 4
+  }
+
+  return penalty
 }
 
 function resolveThemeKeys(context: string) {
