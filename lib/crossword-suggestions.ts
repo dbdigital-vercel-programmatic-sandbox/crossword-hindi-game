@@ -1,3 +1,5 @@
+import { Output, createGateway, generateText } from "ai"
+
 import { MAX_GRID_SIZE } from "@/lib/crossword-editor"
 
 export type Difficulty = "easy" | "medium" | "hard"
@@ -15,6 +17,13 @@ export type SuggestionWord = {
   source: SuggestionSource
 }
 
+export type SuggestionRequest = {
+  theme?: string
+  title?: string
+  difficulty?: Difficulty
+  selectedWords?: string[]
+}
+
 type SuggestionInput = {
   theme: string
   title: string
@@ -22,6 +31,10 @@ type SuggestionInput = {
   selectedWords?: string[]
   aiSuggestions?: string[]
 }
+
+const AI_GATEWAY_MODEL = "openai/gpt-4o-mini"
+const AI_SYSTEM_PROMPT =
+  "You are a crossword builder who suggests word based on the theme"
 
 const THEME_BANK: Record<string, string[]> = {
   animals: [
@@ -573,6 +586,53 @@ export function buildSuggestions({
     .map((entry) => entry.suggestion)
 }
 
+export async function getSuggestionResponse({
+  theme,
+  title,
+  difficulty,
+  selectedWords,
+}: SuggestionRequest) {
+  const normalizedTheme = theme?.trim() ?? ""
+  const normalizedTitle = title?.trim() ?? ""
+  const normalizedDifficulty = normalizeDifficulty(difficulty)
+  const normalizedSelectedWords = Array.isArray(selectedWords)
+    ? selectedWords
+    : []
+
+  const dictionarySuggestions = buildSuggestions({
+    theme: normalizedTheme,
+    title: normalizedTitle,
+    difficulty: normalizedDifficulty,
+    selectedWords: normalizedSelectedWords,
+  })
+  const aiSuggestions = await suggestWordsWithAi({
+    theme: normalizedTheme,
+    title: normalizedTitle,
+    difficulty: normalizedDifficulty,
+    selectedWords: normalizedSelectedWords,
+    candidateWords: dictionarySuggestions.map(
+      (suggestion) => suggestion.answer
+    ),
+  })
+  const suggestions = buildSuggestions({
+    theme: normalizedTheme,
+    title: normalizedTitle,
+    difficulty: normalizedDifficulty,
+    selectedWords: normalizedSelectedWords,
+    aiSuggestions,
+  })
+
+  return {
+    suggestions,
+    engine: aiSuggestions.length > 0 ? "ai" : "dictionary",
+    aiAvailable: isAiSuggestionAvailable(),
+  }
+}
+
+export function isAiSuggestionAvailable() {
+  return Boolean(process.env.APP_BUILDER_VERCEL_AI_GATEWAY)
+}
+
 export async function suggestWordsWithAi({
   theme,
   title,
@@ -586,93 +646,63 @@ export async function suggestWordsWithAi({
   selectedWords?: string[]
   candidateWords?: string[]
 }) {
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = process.env.APP_BUILDER_VERCEL_AI_GATEWAY
 
   if (!apiKey) {
     return []
   }
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10000)
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL ?? "gpt-5-mini",
-        temperature: 0.4,
-        messages: [
-          {
-            role: "system",
-            content:
-              'You are an expert crossword constructor. Return only valid JSON in the form {"words":["WORD"]}. Suggest single-word uppercase answers that make elegant, interlocking themed mini crosswords. Favor vivid, common-enough entries, letter variety, and words likely to cross with the existing selection. Do not include phrases, punctuation, plurals unless especially strong, or repeats.',
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              theme,
-              title,
-              difficulty,
-              maxLength: MAX_GRID_SIZE,
-              minLength: getDifficultyRange(difficulty).min,
-              maxSuggestedLength: getDifficultyRange(difficulty).max,
-              selectedWords,
-              inspirationPool: candidateWords.slice(0, 60),
-              desiredCount: 30,
-            }),
-          },
-        ],
+    const gateway = createGateway({ apiKey })
+    const result = await generateText({
+      model: gateway(AI_GATEWAY_MODEL),
+      system: AI_SYSTEM_PROMPT,
+      prompt: JSON.stringify({
+        instructions:
+          'Return JSON with a top-level "words" array. Suggest single-word uppercase answers that fit the theme, avoid repeats, avoid punctuation, and prefer entries that are likely to cross well with the existing words.',
+        theme,
+        title,
+        difficulty,
+        maxLength: MAX_GRID_SIZE,
+        minLength: getDifficultyRange(difficulty).min,
+        maxSuggestedLength: getDifficultyRange(difficulty).max,
+        selectedWords,
+        inspirationPool: candidateWords.slice(0, 60),
+        desiredCount: 30,
       }),
-      signal: controller.signal,
+      output: Output.json({
+        name: "crossword_word_suggestions",
+        description:
+          "A JSON object containing a words array of suggested answers.",
+      }),
+      temperature: 0.4,
+      abortSignal: controller.signal,
+      timeout: 10000,
     })
 
-    if (!response.ok) {
-      return []
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{
-        message?: {
-          content?: string
-        }
-      }>
-    }
-    const content = data.choices?.[0]?.message?.content
-
-    if (!content) {
-      return []
-    }
-
-    const parsed = extractAiWords(content)
-    return parsed.filter(Boolean)
+    return extractAiWords(result.output)
   } catch {
     return []
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
-function extractAiWords(content: string) {
-  const jsonMatch = content.match(/\{[\s\S]*\}/)
-  const rawJson = jsonMatch?.[0] ?? content
-
-  try {
-    const parsed = JSON.parse(rawJson) as { words?: unknown }
-    if (!Array.isArray(parsed.words)) {
-      return []
-    }
-
-    return parsed.words
-      .filter((value): value is string => typeof value === "string")
-      .map(normalizeAnswer)
-      .filter((word) => word.length >= 3 && word.length <= MAX_GRID_SIZE)
-  } catch {
+function extractAiWords(value: unknown) {
+  if (!value || typeof value !== "object") {
     return []
   }
+
+  const words = (value as { words?: unknown }).words
+
+  if (!Array.isArray(words)) {
+    return []
+  }
+
+  return words
+    .filter((entry): entry is string => typeof entry === "string")
+    .map(normalizeAnswer)
+    .filter((word) => word.length >= 3 && word.length <= MAX_GRID_SIZE)
 }
 
 function tokenizeToSuggestions(value: string, source: SuggestionSource) {
@@ -703,6 +733,10 @@ function getDifficultyRange(difficulty: Difficulty) {
   }
 
   return { min: 4, max: 8 }
+}
+
+function normalizeDifficulty(value?: string): Difficulty {
+  return value === "easy" || value === "hard" ? value : "medium"
 }
 
 function getTargetLength(difficulty: Difficulty) {

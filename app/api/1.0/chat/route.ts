@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic"
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as SuggestionRequest
+
     return NextResponse.json(await getSuggestionResponse(payload))
   } catch {
     return NextResponse.json(

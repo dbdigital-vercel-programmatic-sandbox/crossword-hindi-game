@@ -144,6 +144,7 @@ export function CrosswordCms({
   const [suggestionPoolKey, setSuggestionPoolKey] = useState("")
   const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false)
   const [aiAvailable, setAiAvailable] = useState(false)
+  const [suggestionRefreshNonce, setSuggestionRefreshNonce] = useState(0)
   const [suggestionEngine, setSuggestionEngine] = useState<"dictionary" | "ai">(
     "dictionary"
   )
@@ -158,17 +159,6 @@ export function CrosswordCms({
     [session.words]
   )
 
-  const fallbackSuggestions = useMemo(
-    () =>
-      buildSuggestions({
-        theme: session.theme,
-        title: session.title,
-        difficulty: session.difficulty,
-        selectedWords: session.words.map((word) => word.answer),
-      }),
-    [session.difficulty, session.theme, session.title, session.words]
-  )
-
   const suggestionRequestKey = useMemo(
     () =>
       JSON.stringify({
@@ -176,14 +166,21 @@ export function CrosswordCms({
         title: session.title,
         difficulty: session.difficulty,
         selectedWords: session.words.map((word) => word.answer),
+        refresh: suggestionRefreshNonce,
       }),
-    [session.difficulty, session.theme, session.title, session.words]
+    [
+      session.difficulty,
+      session.theme,
+      session.title,
+      session.words,
+      suggestionRefreshNonce,
+    ]
   )
 
   const allSuggestions =
     suggestionPool.length > 0 && suggestionPoolKey === suggestionRequestKey
       ? suggestionPool
-      : fallbackSuggestions
+      : []
 
   const availableSuggestions = useMemo(() => {
     const seedWords = session.words.map((word) => ({ answer: word.answer }))
@@ -512,7 +509,7 @@ export function CrosswordCms({
       setIsSuggestionsLoading(true)
 
       try {
-        const response = await fetch("/api/puzzles/suggestions", {
+        const response = await fetch("/api/1.0/chat", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -934,6 +931,11 @@ export function CrosswordCms({
             onBack={() => setScreen("details")}
             onCustomWordChange={setCustomWord}
             onAddSuggestion={handleSuggestionAdd}
+            onRefreshSuggestions={() => {
+              setSuggestionPool([])
+              setSuggestionPoolKey("")
+              setSuggestionRefreshNonce((current) => current + 1)
+            }}
             onSuggestionHoverChange={setHoveredSuggestion}
             onRemoveWord={handleWordRemove}
             onShuffle={handleShuffle}
@@ -1318,6 +1320,7 @@ function WordEditorScreen({
   onBack,
   onCustomWordChange,
   onAddSuggestion,
+  onRefreshSuggestions,
   onSuggestionHoverChange,
   onRemoveWord,
   onShuffle,
@@ -1345,6 +1348,7 @@ function WordEditorScreen({
   onBack: () => void
   onCustomWordChange: (value: string) => void
   onAddSuggestion: (answer: string, source: "suggested" | "custom") => void
+  onRefreshSuggestions: () => void
   onSuggestionHoverChange: (answer: string | null) => void
   onRemoveWord: (wordId: string) => void
   onShuffle: () => void
@@ -1523,11 +1527,23 @@ function WordEditorScreen({
                 <h3 className="text-sm font-semibold tracking-[0.18em] text-[#5d675c] uppercase">
                   Suggested words
                 </h3>
+                <button
+                  type="button"
+                  onClick={onRefreshSuggestions}
+                  disabled={isSuggestionsLoading}
+                  className="rounded-full border border-[#d8d1c4] bg-white px-3 py-1.5 text-xs font-semibold text-[#445045] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Refresh suggestions
+                </button>
                 <div className="text-right text-xs text-[#7a7468]">
-                  <div>{availableSuggestions.length} connect right now</div>
                   <div>
                     {isSuggestionsLoading
-                      ? "Refreshing suggestions..."
+                      ? "loading ai suggested words"
+                      : `${availableSuggestions.length} connect right now`}
+                  </div>
+                  <div>
+                    {isSuggestionsLoading
+                      ? "loading ai suggested words"
                       : suggestionEngine === "ai"
                         ? "AI-ranked crossword builder"
                         : aiAvailable
@@ -1537,7 +1553,11 @@ function WordEditorScreen({
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                {availableSuggestions.length === 0 ? (
+                {isSuggestionsLoading ? (
+                  <div className="rounded-2xl bg-[#f6f3ec] px-4 py-3 text-sm text-[#6a7268]">
+                    loading ai suggested words
+                  </div>
+                ) : availableSuggestions.length === 0 ? (
                   <div className="rounded-2xl bg-[#f6f3ec] px-4 py-3 text-sm text-[#6a7268]">
                     No more connected suggestions for the current selection.
                     Remove a word or add a custom one that crosses the existing
